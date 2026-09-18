@@ -2,7 +2,8 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { deleteKurs, deleteUnit, deleteTask, deleteDocument } from '@/actions/admin'
+import { deleteKurs, deleteUnit, deleteTask, deleteDocument, scanDocumentBacklinks } from '@/actions/admin'
+import { backlinkDeleteWarning, backlinkScanFailedWarning } from '@/lib/editor/backlinks'
 
 type DocumentItem = { id: string; title: string; position: number; created_at: string; file_type?: string; document_images?: { id: string }[] }
 type TaskItem = { id: string; title: string; position: number; created_at: string; documents?: DocumentItem[] }
@@ -30,8 +31,29 @@ const confirmMessages = {
 
 const deleteActions = { kurs: deleteKurs, unit: deleteUnit, task: deleteTask, document: deleteDocument }
 
+/**
+ * What the admin should know before deleting this Dokument, or `null` when
+ * nothing links to it — in which case the confirm stays exactly the plain
+ * question it was before backlinks existed (#75).
+ *
+ * ⚠ A FAILED SCAN IS SAID OUT LOUD AND NEVER BLOCKS. Returning `null` here
+ * would let „the check could not run" masquerade as „nothing links here", which
+ * is the one outcome the warning exists to prevent; refusing the delete would
+ * be worse still, because a broken scan would then lock the admin out of their
+ * own catalogue. So: name the failure, and let them decide.
+ */
+async function documentDeleteWarning(docId: string): Promise<string | null> {
+  try {
+    const result = await scanDocumentBacklinks(docId)
+    if (result.ok) return backlinkDeleteWarning(result.data)
+    return backlinkScanFailedWarning('dieses Dokument', result.error)
+  } catch {
+    return backlinkScanFailedWarning('dieses Dokument')
+  }
+}
+
 const editHrefs = {
-  kurs: (id: string) => `/admin/kurse/new?editId=${id}`,
+  kurs: (id: string) => `/admin/kurse/${id}`,
   unit: (id: string) => `/admin/units/new?editId=${id}`,
   task: (id: string) => `/admin/tasks/new?editId=${id}`,
   document: (id: string) => `/admin/documents/new?editId=${id}`,
@@ -42,12 +64,23 @@ export function AdminTree({ kurse, selectedId = '', deleteLevel }: Props) {
   const [loadingId, setLoadingId] = useState<string | null>(null)
 
   async function handleDelete(id: string, title: string, level: keyof typeof deleteActions) {
-    if (!window.confirm(confirmMessages[level](title))) return
+    // Deleting a Dokument something links to breaks that link, so the scan runs
+    // BEFORE the confirm and its result becomes part of the question (#75).
+    // Only the document level: a Kurs/Unit/Task delete cascades whole subtrees
+    // and would need a different, per-descendant scan — out of scope here.
     setLoadingId(id)
-    const result = await deleteActions[level](id)
-    setLoadingId(null)
-    if (!result.ok) alert(`Fehler: ${result.error}`)
-    else router.refresh()
+    try {
+      const warning = level === 'document' ? await documentDeleteWarning(id) : null
+      const question = confirmMessages[level](title)
+      if (!window.confirm(warning ? `${question}\n\n${warning}\n\nTrotzdem löschen?` : question)) {
+        return
+      }
+      const result = await deleteActions[level](id)
+      if (!result.ok) alert(`Fehler: ${result.error}`)
+      else router.refresh()
+    } finally {
+      setLoadingId(null)
+    }
   }
 
   function itemBtns(id: string, title: string, level: keyof typeof deleteActions) {

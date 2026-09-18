@@ -3,13 +3,16 @@
 import { useState } from 'react'
 import { DocumentForm } from '@/components/admin/DocumentForm'
 import { AdminTree } from '@/components/admin/AdminTree'
+import type { Document as DokumentRow } from '@/types'
 
 type Document = { id: string; title: string; position: number; created_at: string; file_type?: string; document_images?: { id: string }[] }
 type Task = { id: string; unit_id: string; title: string; description: string | null; position: number; created_at: string; documents: Document[] }
 type Unit = { id: string; kurs_id: string; title: string; description: string | null; position: number; created_at: string; tasks: Task[] }
 type KursTree = { id: string; title: string; units: Unit[] }
 
-type DefaultValues = { title: string; description: string | null; position: number; file_path?: string | null; file_type?: 'pdf' | 'image' | 'image_collection' }
+// `file_type` mirrors the row's union rather than restating it — a third copy
+// of the list is a third place to forget when a kind is added (#107).
+type DefaultValues = { title: string; description: string | null; position: number; file_path?: string | null; file_type?: DokumentRow['file_type'] }
 
 type Props = {
   kurseTree: KursTree[]

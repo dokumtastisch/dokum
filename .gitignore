@@ -43,6 +43,9 @@ yarn-error.log*
 .agents/
 skills-lock.json
 
+# playwright mcp scratch (snapshots, console logs, screenshots from manual QA)
+.playwright-mcp/
+
 # MCP server config (project-scoped, may contain sensitive URLs)
 .mcp.json
 

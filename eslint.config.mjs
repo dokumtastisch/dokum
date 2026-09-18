@@ -18,7 +18,10 @@ const eslintConfig = defineConfig([
   // Override default ignores of eslint-config-next.
   globalIgnores([
     // Default ignores of eslint-config-next:
-    ".next/**",
+    // `**/` rather than a root-anchored `.next/**`: git worktrees under
+    // .claude/worktrees/ each carry their own build output, and ESLint would
+    // otherwise lint another branch's generated bundles as if they were ours.
+    "**/.next/**",
     "out/**",
     "build/**",
     "next-env.d.ts",

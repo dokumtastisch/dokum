@@ -3,8 +3,9 @@
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useState, type RefObject } from 'react'
-import { publishEditorDraft } from '@/actions/admin'
+import { publishEditorDraft, scanDocumentBacklinks } from '@/actions/admin'
 import { MAX_FILE_SIZE_BYTES } from '@/lib/constants'
+import { backlinkRepublishWarning, backlinkScanFailedWarning } from '@/lib/editor/backlinks'
 import type { EditorController } from '@/lib/editor/controller'
 import {
   buildPngFilename,
@@ -41,7 +42,12 @@ import type { EditorTargetKurs } from '@/types'
  * Publish (slice 11, #39 — no reference counterpart): „Als Dokument
  * speichern" sends the same 2×-rendered PNG to publishEditorDraft, targeting
  * the LIVE Kurs → Unit → Task selection. The filename (minus `.png`) seeds
- * the Document title (PRD story 27 — no separate title input). When the
+ * the Document title on the CREATE paths only (PRD story 27 — no separate
+ * title input); an update-in-place leaves the existing title alone, because
+ * this field is not persisted with the draft and resets on reload, so
+ * applying it would silently rename live content (#85). The title still
+ * travels with every request: `mode: 'update'` falls back to creating when
+ * the link is dead, and that path needs it. When the
  * draft is linked, the primary button relabels to „Dokument aktualisieren"
  * (update-in-place default; same Document entry for students, story 32) and
  * a secondary „Als neues Dokument" creates + re-links instead. Size guard:
@@ -178,6 +184,13 @@ export function ExportBar({
     setBusy('publish')
     setPublishStatus({ kind: 'idle' })
     try {
+      // „Als neues Dokument" is the ONE publish path that can strand a link
+      // (#75): it mints a new Document and re-links the draft, so everything
+      // pointing at the current one keeps pointing there — at a document
+      // nothing will update again. Asked FIRST, before the save and the
+      // export, so declining costs nothing.
+      if (mode === 'new' && publishedDocId && !(await confirmOrphaning(publishedDocId))) return
+
       // Publish implies save (#40 parity finding): persist the draft BEFORE
       // exporting, so the stored JSON always matches the published PNG.
       const saved = await saveDraft()
@@ -242,7 +255,10 @@ export function ExportBar({
       setPublishedDocId(result.data.documentId)
       setPublishStatus({
         kind: 'success',
-        text: result.data.mode === 'created' ? 'Dokument erstellt.' : 'Dokument aktualisiert.',
+        text:
+          result.data.mode === 'created'
+            ? 'Dokument erstellt.'
+            : 'Dokument aktualisiert (Titel unverändert).',
         documentId: result.data.documentId,
       })
       router.refresh() // page props + draft list pick up the fresh link
@@ -370,6 +386,29 @@ export function ExportBar({
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
+
+/**
+ * Whether „Als neues Dokument" may proceed: silently true when nothing points
+ * at the document being left behind, a confirm otherwise (#75).
+ *
+ * ⚠ A FAILED SCAN ASKS RATHER THAN ASSUMES, for the same reason it does on the
+ * delete path: proceeding silently would let „the check could not run" pass for
+ * „nothing links here", and refusing outright would make a broken scan block
+ * publishing altogether.
+ */
+async function confirmOrphaning(previousDocumentId: string): Promise<boolean> {
+  let warning: string | null
+  try {
+    const scan = await scanDocumentBacklinks(previousDocumentId)
+    warning = scan.ok
+      ? backlinkRepublishWarning(scan.data)
+      : backlinkScanFailedWarning('das bisherige Dokument', scan.error)
+  } catch {
+    warning = backlinkScanFailedWarning('das bisherige Dokument')
+  }
+  if (!warning) return true
+  return window.confirm(`${warning}\n\nTrotzdem als neues Dokument veröffentlichen?`)
+}
 
 /**
  * `buildPngFilename` over the 1-based indices of the selection, or null when

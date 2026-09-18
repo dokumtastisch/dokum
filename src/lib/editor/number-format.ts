@@ -46,3 +46,50 @@ export function formatValue(v: number): string {
   const parts = raw.split('.')
   return sign + groupThousands(parts[0] || '0') + (parts[1] ? ',' + parts[1] : '')
 }
+
+// ── Number ENTRY, not display (#68) ─────────────────────────────────────────
+//
+// Not part of the parity port above: nothing in the reference editor reads a
+// number a human typed, because only an admin ever set a value there, through
+// a modal. A student typing into the document needs the round trip, and it has
+// to be LOSSLESS — `formatValue` is not, it rounds by magnitude, so putting a
+// value through it and back would quietly change the document's numbers.
+//
+// The pair below is exact in both directions: a decimal comma is all that
+// separates the two forms, thousands are never introduced, nothing is rounded.
+
+/** Whether a string is a plain number the resolver's `parseFloat` reads whole. */
+function isPlainNumber(s: string): boolean {
+  return /^[+-]?(\d+\.?\d*|\.\d+)$/.test(s)
+}
+
+/**
+ * German number entry → the plain form `parseFloat` reads. Grouping spaces go
+ * (that is how {@link formatValue} renders thousands, so it is what a student
+ * copies back in); a decimal comma becomes a point, and only then do points
+ * count as grouping, which is the German rule.
+ *
+ * Text that is not a number comes back EXACTLY as typed, spaces and all —
+ * rejecting it is not this function's business, the resolver already has
+ * documented behaviour for a value it cannot parse, and a student staring at
+ * their own mistake should see what they actually wrote.
+ */
+export function parseGermanEntry(typed: string): string {
+  const compact = typed.replace(/\s/g, '')
+  const plain = compact.includes(',')
+    ? compact.replace(/\./g, '').replace(',', '.')
+    : compact
+  return isPlainNumber(plain) ? plain : typed
+}
+
+/**
+ * The inverse: a stored plain number → what a German reader expects to see in
+ * an input box. Only the decimal separator changes — no grouping, no rounding
+ * — so {@link parseGermanEntry} maps it back to the identical string.
+ *
+ * Anything that is not a plain number is passed through, so a student's
+ * unparseable text stays visible exactly as they typed it.
+ */
+export function formatGermanEntry(stored: string): string {
+  return isPlainNumber(stored) ? stored.replace('.', ',') : stored
+}

@@ -6,7 +6,7 @@
  * formatting" patch) in Node — these tests are the port's parity contract.
  */
 import { describe, expect, it } from 'vitest'
-import { formatValue } from './number-format'
+import { formatGermanEntry, formatValue, parseGermanEntry } from './number-format'
 
 describe('formatValue', () => {
   it.each<[number, string]>([
@@ -60,4 +60,57 @@ describe('formatValue', () => {
   ])('integer %d → %j', (input, expected) => {
     expect(formatValue(input)).toBe(expected)
   })
+})
+
+/**
+ * Number ENTRY (#68) — not part of the parity port above. These are not
+ * goldens from the reference editor: nothing there ever read a number a human
+ * typed. The contract they pin is the one the student-facing controls need —
+ * that the two directions are exact inverses, so a value survives being shown
+ * and read back however many times a document is recomputed.
+ */
+describe('parseGermanEntry', () => {
+  it.each<[string, string]>([
+    ['1000', '1000'],
+    ['7,5', '7.5'],
+    ['7.5', '7.5'], // a point is already the plain form
+    ['-0,25', '-0.25'],
+    ['1 050', '1050'], // formatValue groups thousands with spaces
+    ['1 234,56', '1234.56'],
+    ['1.234,56', '1234.56'], // German grouping: the comma decides the decimals
+    ['', ''],
+  ])('%j → %j', (typed, expected) => {
+    expect(parseGermanEntry(typed)).toBe(expected)
+  })
+
+  it('hands back text that is not a number exactly as it was typed', () => {
+    expect(parseGermanEntry('keine Zahl')).toBe('keine Zahl')
+    expect(parseGermanEntry('-')).toBe('-')
+  })
+})
+
+describe('formatGermanEntry', () => {
+  it.each<[string, string]>([
+    ['1000', '1000'],
+    ['7.5', '7,5'],
+    ['-0.25', '-0,25'],
+    ['0', '0'],
+    ['keine Zahl', 'keine Zahl'],
+  ])('%j → %j', (stored, expected) => {
+    expect(formatGermanEntry(stored)).toBe(expected)
+  })
+
+  it('never groups and never rounds — unlike formatValue', () => {
+    expect(formatGermanEntry('1234.5678')).toBe('1234,5678')
+    expect(formatValue(1234.5678)).toBe('1 235')
+  })
+})
+
+describe('the entry round trip', () => {
+  it.each(['0', '1000', '7.5', '-0.25', '1234.5678', '0.000001'])(
+    'survives show-then-read unchanged: %j',
+    (stored) => {
+      expect(parseGermanEntry(formatGermanEntry(stored))).toBe(stored)
+    }
+  )
 })

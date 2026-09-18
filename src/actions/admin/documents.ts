@@ -1,7 +1,8 @@
 'use server'
 
 import { STORAGE_BUCKET, MAX_FILE_SIZE_BYTES, ALLOWED_IMAGE_MIMES, ALLOWED_FILE_MIMES, MIME_TO_EXT } from '@/lib/constants'
-import { DocumentMetaSchema, DocumentUpdateMetaSchema } from '@/lib/schemas'
+import { DocumentMetaSchema, DocumentReorderSchema, DocumentUpdateMetaSchema } from '@/lib/schemas'
+import { METADATA_ONLY_FILE_TYPES } from '@/lib/document-view'
 import type { ActionResult } from '@/types'
 import { logAdminAction } from '@/lib/audit'
 import { getAdminUser, parseForm, revalidateAdminPages, collectStoragePaths, sanitise, removeStorageObjects, type DocumentFileRef } from './_shared'
@@ -105,8 +106,21 @@ export async function updateDocument(docId: string, formData: FormData): Promise
     .single()
   if (fetchErr || !currentDoc) return { ok: false, error: 'Document not found.' }
 
-  // image_collection: only metadata editable (no file replacement)
-  if (currentDoc.file_type === 'image_collection') {
+  // Metadata-only kinds — no file replacement.
+  //
+  // `image_collection` because its pages are uploaded as a set, and (since
+  // #66) `interactive` because its file IS the published PNG of a draft:
+  // replacing it here would flip file_type away from 'interactive' while
+  // leaving the content JSON and the re-homed document_images behind, i.e. a
+  // document whose row disagrees with itself. Re-publishing the draft is the
+  // only way to change an interactive document's file. This is also the
+  // shape update-document collapses to entirely under #82.
+  //
+  // `lesson` (#107) joins them for the same reason and a starker one: a
+  // Lernseite has NO file at all — it is its `content` — so an upload here
+  // would invent a file_path, flip the row to 'pdf' and strand a written page
+  // that nothing would ever render again.
+  if (METADATA_ONLY_FILE_TYPES.has(currentDoc.file_type)) {
     const { error } = await supabase.from('documents').update({ title, description, position }).eq('id', docId)
     if (error) return { ok: false, error: error.message }
     await logAdminAction({ actorId: user.id, action: 'update', entityType: 'document', entityId: docId, entityTitle: title })
@@ -164,6 +178,67 @@ export async function deleteDocument(docId: string): Promise<ActionResult> {
   await removeStorageObjects(supabase, pathsToDelete, 'deleteDocument')
 
   await logAdminAction({ actorId: user.id, action: 'delete', entityType: 'document', entityId: docId, metadata: { paths_deleted: pathsToDelete.length } })
+  revalidateAdminPages()
+  return { ok: true, data: undefined }
+}
+
+/**
+ * Writes the order a drag in the admin tree produced (the Dokumente of ONE
+ * Aufgabe). `position` stops being a number anyone types and becomes the index
+ * of the row where it was dropped.
+ *
+ * ⚠ IT PROVES OWNERSHIP FIRST. The ids arrive from the browser, and without the
+ * check a crafted call could renumber a Dokument in someone else's Aufgabe —
+ * `.eq('task_id', …)` on the update is the second lock on the same door. The
+ * list must also be COMPLETE: reordering a subset would silently collide with
+ * the positions of the rows left out.
+ *
+ * One statement per row, like `reorderLessons`, and for the same reason: an
+ * upsert would have to carry every NOT NULL column of a row it is only
+ * renumbering. A partial failure leaves a partial order — visible, and fixed by
+ * dragging again.
+ */
+export async function reorderDocuments(
+  taskId: string,
+  documentIds: string[]
+): Promise<ActionResult> {
+  const { supabase, user } = await getAdminUser()
+
+  const parsed = DocumentReorderSchema.safeParse({ task_id: taskId, document_ids: documentIds })
+  if (!parsed.success) return { ok: false, error: parsed.error.issues[0].message }
+  const { task_id, document_ids } = parsed.data
+
+  const { data: existing, error: readError } = await supabase
+    .from('documents')
+    .select('id')
+    .eq('task_id', task_id)
+  if (readError) {
+    return { ok: false, error: `Reihenfolge konnte nicht geprüft werden: ${readError.message}` }
+  }
+
+  const owned = new Set((existing ?? []).map((row) => row.id as string))
+  const requested = new Set(document_ids)
+  if (owned.size !== requested.size || document_ids.some((id) => !owned.has(id))) {
+    return { ok: false, error: 'Die Reihenfolge passt nicht zu dieser Aufgabe.' }
+  }
+
+  const results = await Promise.all(
+    document_ids.map((id, index) =>
+      supabase.from('documents').update({ position: index }).eq('id', id).eq('task_id', task_id)
+    )
+  )
+  const failed = results.find((result) => result.error)
+  if (failed?.error) {
+    return { ok: false, error: `Reihenfolge konnte nicht gespeichert werden: ${failed.error.message}` }
+  }
+
+  await logAdminAction({
+    actorId: user.id,
+    action: 'update',
+    entityType: 'task',
+    entityId: task_id,
+    entityTitle: 'Reihenfolge der Dokumente',
+  })
   revalidateAdminPages()
   return { ok: true, data: undefined }
 }

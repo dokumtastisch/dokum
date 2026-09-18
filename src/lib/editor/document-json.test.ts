@@ -18,17 +18,23 @@
 
 import { describe, expect, it } from 'vitest'
 import {
+  DOCUMENT_JSON_VERSIONS,
   DocumentJsonSchema,
   JSON_IMPORT_EXAMPLE,
+  LATEST_DOCUMENT_JSON_VERSION,
+  collectDocumentAnchors,
   collectReferencedImageIds,
   describeDocumentJsonError,
   emptyEditorDocumentJson,
   importEditorJson,
+  promoteStrayRunToBlock,
   serializeEditorState,
+  serializesAsOwnBlock,
   withDocumentMeta,
-  type EditorDocumentJson,
   type ImportAdapters,
+  type LatestEditorDocumentJson,
 } from './document-json'
+import { readDocumentJson } from './document-version'
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -57,14 +63,20 @@ function makeAdapters(): ImportAdapters {
 const IMG_ID = '0f8fad5b-d9cb-469f-a165-70867728950e'
 const IMG_ID_2 = '7c9e6679-7425-40de-944b-e07fc1f90ae7'
 
-function parse(doc: unknown): EditorDocumentJson {
-  const result = DocumentJsonSchema.safeParse(doc)
-  if (!result.success) throw new Error(result.error.issues[0]?.message ?? 'invalid')
-  return result.data
+/**
+ * Parse AND upgrade — the read boundary every stored snapshot passes through.
+ * The v1.0 fixtures below are therefore imported as the v1.1 documents the
+ * importer actually consumes, which is also what exercises the upgrade hop on
+ * every single golden case.
+ */
+function parse(doc: unknown): LatestEditorDocumentJson {
+  const result = readDocumentJson(doc)
+  if (!result.ok) throw new Error(result.error)
+  return result.doc
 }
 
 /** Import J, then serialize the resulting DOM with the returned library list. */
-function roundTrip(doc: EditorDocumentJson): EditorDocumentJson {
+function roundTrip(doc: LatestEditorDocumentJson): LatestEditorDocumentJson {
   const editor = makeEditor()
   const result = importEditorJson(doc, editor, makeAdapters())
   const out = serializeEditorState(editor, result.libraryLatex)
@@ -217,6 +229,48 @@ describe('DocumentJsonSchema', () => {
   })
 })
 
+// ── Versioned family (#64) ──────────────────────────────────────────────────
+
+describe('DocumentJsonSchema — versioned family', () => {
+  it('discriminates on version: every supported version parses its own shape', () => {
+    for (const version of DOCUMENT_JSON_VERSIONS) {
+      const result = DocumentJsonSchema.safeParse({ version, variables: [], content: [] })
+      expect(result.success).toBe(true)
+      if (result.success) expect(result.data.version).toBe(version)
+    }
+  })
+
+  it('reports an unsupported version on the version path, not as a shape failure', () => {
+    // What keeps the German boundary message addressable — describeDocumentJsonError
+    // branches on path[0] === 'version'.
+    const result = DocumentJsonSchema.safeParse({ ...REFERENCE_EXAMPLE, version: '0.9' })
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      expect(result.error.issues.some((i) => i.path[0] === 'version')).toBe(true)
+    }
+  })
+
+  it('names every supported version in the unsupported-version message', () => {
+    const result = DocumentJsonSchema.safeParse({ ...REFERENCE_EXAMPLE, version: '0.9' })
+    expect(result.success).toBe(false)
+    if (result.success) return
+    const message = describeDocumentJsonError(result.error, { ...REFERENCE_EXAMPLE, version: '0.9' })
+    for (const version of DOCUMENT_JSON_VERSIONS) expect(message).toContain(`"${version}"`)
+  })
+
+  it('keeps per-version strictness: a valid version does not relax unknown keys', () => {
+    for (const version of DOCUMENT_JSON_VERSIONS) {
+      const result = DocumentJsonSchema.safeParse({
+        version,
+        variables: [],
+        content: [],
+        schmuggelware: true,
+      })
+      expect(result.success).toBe(false)
+    }
+  })
+})
+
 // ── JSON import modal boundary helpers (slice 9, #37) ───────────────────────
 
 describe('JSON_IMPORT_EXAMPLE', () => {
@@ -254,7 +308,7 @@ describe('describeDocumentJsonError', () => {
   })
 
   it('wrong or missing version → German version message', () => {
-    const expected = 'Nicht unterstützte Schema-Version — erwartet wird "1.0".'
+    const expected = 'Nicht unterstützte Schema-Version — erwartet wird "1.0" oder "1.1".'
     expect(describeFor({ ...REFERENCE_EXAMPLE, version: '2.0' })).toBe(expected)
     const withoutVersion: Record<string, unknown> = { ...REFERENCE_EXAMPLE }
     delete withoutVersion['version']
@@ -296,7 +350,9 @@ describe('describeDocumentJsonError', () => {
   it('other violations get the German lead-in plus the issue path', () => {
     const unknownBlock = { version: '1.0', variables: [], content: [{ type: 'video' }] }
     const msg = describeFor(unknownBlock)
-    expect(msg).toContain('Das JSON entspricht nicht dem Dokumentformat (Version 1.0)')
+    expect(msg).toContain(
+      `Das JSON entspricht nicht dem Dokumentformat (Version ${DOCUMENT_JSON_VERSIONS.join('/')})`
+    )
     expect(msg).toContain('content[0]')
 
     const missingVariables = { version: '1.0', content: [] }
@@ -672,7 +728,7 @@ describe('importEditorJson', () => {
         { id: 'b', type: 'input', name: ' x ', value: 2 },
       ],
       content: [],
-    } as unknown as EditorDocumentJson
+    } as unknown as LatestEditorDocumentJson
     expect(() => importEditorJson(doc, editor, makeAdapters())).toThrow(
       'Doppelter Variablenname im JSON: "x". Variablennamen müssen eindeutig sein.'
     )
@@ -708,7 +764,7 @@ describe('importEditorJson', () => {
       version: '1.0',
       variables: [],
       content: [{ type: 'mystery', text: 'huh' }],
-    } as unknown as EditorDocumentJson
+    } as unknown as LatestEditorDocumentJson
     importEditorJson(doc, editor, makeAdapters())
     expect(editor.querySelector('p')!.textContent).toBe('huh')
     editor.remove()
@@ -888,7 +944,7 @@ describe('serializeEditorState', () => {
 // ── Round-trip byte-stability (the slice-7 acceptance criterion) ────────────
 
 describe('export → import → export', () => {
-  function expectStable(j1: EditorDocumentJson) {
+  function expectStable(j1: LatestEditorDocumentJson) {
     expect(DocumentJsonSchema.safeParse(j1).success).toBe(true)
     const j2 = roundTrip(j1)
     expect(JSON.stringify(j2)).toBe(JSON.stringify(j1))
@@ -1028,6 +1084,273 @@ describe('export → import → export', () => {
   })
 })
 
+// ── Block anchors / Sprungmarken (v1.1, #71) ────────────────────────────────
+
+describe('block anchors (schema v1.1)', () => {
+  const ANCHORED = {
+    version: '1.1',
+    variables: [],
+    content: [{ type: 'heading', level: 1, children: ['Kapitel'], anchor: { id: 'anc_a', label: 'Kapitel 1' } }],
+  }
+
+  it('accepts a block anchor on a v1.1 document', () => {
+    expect(DocumentJsonSchema.safeParse(ANCHORED).success).toBe(true)
+  })
+
+  it('rejects a block anchor on a v1.0 document — the version discriminator means something', () => {
+    // Anchors arrived WITH 1.1. Admitting them into 1.0 would make the version
+    // decorative and let a snapshot claim a shape its version does not have.
+    expect(DocumentJsonSchema.safeParse({ ...ANCHORED, version: '1.0' }).success).toBe(false)
+  })
+
+  it('accepts an anchor on every block type', () => {
+    const anchor = { id: 'anc_x', label: 'Marke' }
+    const doc = {
+      version: '1.1',
+      variables: [],
+      content: [
+        { type: 'paragraph', children: ['p'], anchor },
+        { type: 'heading', level: 2, children: ['h'], anchor: { id: 'anc_h', label: 'H' } },
+        { type: 'list', ordered: false, items: [['a']], anchor: { id: 'anc_l', label: 'L' } },
+        { type: 'formula', latex: 'x', anchor: { id: 'anc_f', label: 'F' } },
+        { type: 'code', text: 'x', anchor: { id: 'anc_c', label: 'C' } },
+        { type: 'image', imageId: IMG_ID, anchor: { id: 'anc_i', label: 'I' } },
+      ],
+    }
+    expect(DocumentJsonSchema.safeParse(doc).success).toBe(true)
+  })
+
+  it('requires a non-empty id and rejects unknown anchor keys', () => {
+    const withAnchor = (anchor: unknown) => ({
+      version: '1.1',
+      variables: [],
+      content: [{ type: 'paragraph', children: ['p'], anchor }],
+    })
+    expect(DocumentJsonSchema.safeParse(withAnchor({ id: '', label: 'X' })).success).toBe(false)
+    expect(DocumentJsonSchema.safeParse(withAnchor({ label: 'X' })).success).toBe(false)
+    expect(DocumentJsonSchema.safeParse(withAnchor({ id: 'anc_a' })).success).toBe(false)
+    expect(DocumentJsonSchema.safeParse(withAnchor({ id: 'anc_a', label: 'X', href: 'y' })).success).toBe(false)
+    // An empty label is fine — a Sprungmarke may be renamed to nothing.
+    expect(DocumentJsonSchema.safeParse(withAnchor({ id: 'anc_a', label: '' })).success).toBe(true)
+  })
+
+  it('keeps v1.1 blocks strict — extending with `anchor` did not open them up', () => {
+    const doc = {
+      version: '1.1',
+      variables: [],
+      content: [{ type: 'code', text: 'x', bogus: true }],
+    }
+    expect(DocumentJsonSchema.safeParse(doc).success).toBe(false)
+  })
+
+  it('imports the anchor onto the block element’s dataset', () => {
+    const editor = makeEditor()
+    importEditorJson(parse(ANCHORED), editor, makeAdapters())
+    const h1 = editor.querySelector<HTMLElement>('h1')!
+    expect(h1.dataset['anchorId']).toBe('anc_a')
+    expect(h1.dataset['anchorLabel']).toBe('Kapitel 1')
+    editor.remove()
+  })
+
+  it('leaves unmarked blocks free of anchor attributes', () => {
+    const editor = makeEditor()
+    importEditorJson(
+      parse({ version: '1.1', variables: [], content: [{ type: 'paragraph', children: ['p'] }] }),
+      editor,
+      makeAdapters()
+    )
+    expect(editor.querySelector('p')!.hasAttribute('data-anchor-id')).toBe(false)
+    editor.remove()
+  })
+
+  it('serializes the anchor back out of the dataset', () => {
+    const editor = makeEditor()
+    editor.innerHTML = '<h1 data-anchor-id="anc_a" data-anchor-label="Kapitel 1">Kapitel</h1>'
+    const json = serializeEditorState(editor, [])
+    expect(json.content[0]).toEqual({
+      type: 'heading',
+      level: 1,
+      children: ['Kapitel'],
+      anchor: { id: 'anc_a', label: 'Kapitel 1' },
+    })
+    editor.remove()
+  })
+
+  it('skips a block whose anchor id is blank — an unlinkable marker is no marker', () => {
+    const editor = makeEditor()
+    editor.innerHTML = '<p data-anchor-id="" data-anchor-label="X">text</p>'
+    expect(serializeEditorState(editor, []).content[0]).toEqual({
+      type: 'paragraph',
+      children: ['text'],
+    })
+    editor.remove()
+  })
+
+  it('emits the anchor in a fixed position — last, after style', () => {
+    // Key order is part of the byte-stability contract; the schema declares
+    // `anchor` in the same place, so parse order and emit order agree.
+    const editor = makeEditor()
+    editor.innerHTML =
+      '<h2 style="text-align:center" data-anchor-id="anc_a" data-anchor-label="M">t</h2>'
+    expect(Object.keys(serializeEditorState(editor, []).content[0]!)).toEqual([
+      'type',
+      'level',
+      'children',
+      'style',
+      'anchor',
+    ])
+    editor.remove()
+  })
+
+  it('serializesAsOwnBlock agrees with what the serializer actually emits', () => {
+    // The predicate gates where a Sprungmarke may be placed, so it has to
+    // match the serializer exactly: a mark on something the save discards is
+    // a mark the author can see but nothing can link to.
+    const editor = makeEditor()
+    editor.innerHTML =
+      '<p>absatz</p>' +
+      '<h1>titel</h1>' +
+      '<pre>code</pre>' +
+      '<ul><li>eins</li></ul>' +
+      '<div class="formula-block"><div class="render-target" data-raw-latex="x"></div></div>' +
+      `<div class="image-block"><img data-image-id="${IMG_ID}"></div>` +
+      // Dropped by the serializer, so not markable:
+      '<div id="hiddenFields"></div>' +
+      '<div class="drop-indicator"></div>' +
+      '<div class="image-block"><img src="blob:noch-am-hochladen"></div>' +
+      '<span>streuner</span>'
+    const emitted = serializeEditorState(editor, []).content.length
+    const markable = Array.from(editor.children).filter((el) =>
+      serializesAsOwnBlock(el as HTMLElement)
+    )
+    // The stray <span> is folded into a trailing paragraph, so the serializer
+    // emits one block more than there are markable elements.
+    expect(markable.map((el) => el.tagName + (el.className ? '.' + el.className : ''))).toEqual([
+      'P',
+      'H1',
+      'PRE',
+      'UL',
+      'DIV.formula-block',
+      'DIV.image-block',
+    ])
+    expect(emitted).toBe(markable.length + 1)
+    editor.remove()
+  })
+
+  // #93: the first line of an empty document stays a bare text node, so it is
+  // correctly unmarkable — and the author, seeing the caret in it, cannot tell
+  // why. Promotion makes the line markable without changing what is saved.
+  it('promotes the first bare line into the paragraph the serializer would emit', () => {
+    const editor = makeEditor()
+    editor.innerHTML = 'erste Zeile<div>zweite Zeile</div>'
+    const before = serializeEditorState(editor, [])
+
+    const promoted = promoteStrayRunToBlock(editor, editor.firstChild!)!
+    expect(promoted.tagName).toBe('P')
+    expect(promoted.textContent).toBe('erste Zeile')
+    expect(serializesAsOwnBlock(promoted)).toBe(true)
+    // The whole point: the saved document is untouched by the promotion.
+    expect(serializeEditorState(editor, [])).toEqual(before)
+    editor.remove()
+  })
+
+  it('promotes the whole contiguous stray run, not just the node passed in', () => {
+    // The serializer folds a run of strays into ONE paragraph; promoting only
+    // the caret's own node would split it into two and change the document.
+    const editor = makeEditor()
+    editor.innerHTML = 'links<b>fett</b>rechts<p>eigener Block</p>'
+    const before = serializeEditorState(editor, [])
+
+    const promoted = promoteStrayRunToBlock(editor, editor.childNodes[1]!)!
+    expect(promoted.textContent).toBe('linksfettrechts')
+    expect(editor.children.length).toBe(2)
+    expect(serializeEditorState(editor, [])).toEqual(before)
+    editor.remove()
+  })
+
+  it('stops the run at the hidden field store rather than folding it in', () => {
+    // #hiddenFields inside a paragraph would be serialized as visible content
+    // — the one place where following the serializer's own grouping exactly
+    // would be actively wrong.
+    const editor = makeEditor()
+    editor.innerHTML = 'sichtbar<div id="hiddenFields"></div>dahinter'
+
+    const promoted = promoteStrayRunToBlock(editor, editor.firstChild!)!
+    expect(promoted.textContent).toBe('sichtbar')
+    expect(promoted.querySelector('#hiddenFields')).toBeNull()
+    expect(editor.querySelector('#hiddenFields')!.parentElement).toBe(editor)
+    editor.remove()
+  })
+
+  it('refuses anything that is already a block, dropped chrome, or not a child of the editor', () => {
+    const editor = makeEditor()
+    editor.innerHTML =
+      '<p>absatz</p><div id="hiddenFields"></div><div class="drop-indicator"></div>'
+    const [paragraph, hidden, indicator] = Array.from(editor.children)
+    expect(promoteStrayRunToBlock(editor, paragraph!)).toBeNull()
+    expect(promoteStrayRunToBlock(editor, hidden!)).toBeNull()
+    expect(promoteStrayRunToBlock(editor, indicator!)).toBeNull()
+    // A node one level down is not a top-level stray — the caller resolves the
+    // top-level node first.
+    expect(promoteStrayRunToBlock(editor, paragraph!.firstChild!)).toBeNull()
+    editor.remove()
+  })
+
+  it('is byte-stable across export → import → export for every anchored block type', () => {
+    const editor = makeEditor()
+    importEditorJson(
+      parse({
+        version: '1.1',
+        variables: [],
+        content: [
+          { type: 'heading', level: 1, children: ['Kapitel'], anchor: { id: 'anc_h', label: 'Kapitel 1' } },
+          { type: 'paragraph', children: ['text'], anchor: { id: 'anc_p', label: 'Absatz' } },
+          { type: 'list', ordered: true, items: [['a']], anchor: { id: 'anc_l', label: 'Liste' } },
+          { type: 'formula', latex: 'x^2', anchor: { id: 'anc_f', label: 'Formel' } },
+          { type: 'code', text: 'x', anchor: { id: 'anc_c', label: 'Code' } },
+          { type: 'image', imageId: IMG_ID, anchor: { id: 'anc_i', label: 'Bild' } },
+          { type: 'paragraph', children: ['ohne Marke'] },
+        ],
+      }),
+      editor,
+      makeAdapters()
+    )
+    const j1 = serializeEditorState(editor, [])
+    expect(j1.content.map((b) => b.anchor?.id ?? null)).toEqual([
+      'anc_h',
+      'anc_p',
+      'anc_l',
+      'anc_f',
+      'anc_c',
+      'anc_i',
+      null,
+    ])
+    const j2 = roundTrip(j1)
+    expect(JSON.stringify(j2)).toBe(JSON.stringify(j1))
+    // And the fixed point holds on a further pass.
+    expect(JSON.stringify(roundTrip(j2))).toBe(JSON.stringify(j2))
+    editor.remove()
+  })
+
+  it('survives an anchor whose label carries quotes and angle brackets', () => {
+    const editor = makeEditor()
+    const label = 'Kapitel "1" <b> & mehr'
+    importEditorJson(
+      parse({
+        version: '1.1',
+        variables: [],
+        content: [{ type: 'paragraph', children: ['t'], anchor: { id: 'anc_a', label } }],
+      }),
+      editor,
+      makeAdapters()
+    )
+    const j1 = serializeEditorState(editor, [])
+    expect(j1.content[0]!.anchor).toEqual({ id: 'anc_a', label })
+    expect(JSON.stringify(roundTrip(j1))).toBe(JSON.stringify(j1))
+    editor.remove()
+  })
+})
+
 // ── Image-reference helpers (slice 8, #36) ──────────────────────────────────
 
 describe('collectReferencedImageIds', () => {
@@ -1052,7 +1375,12 @@ describe('emptyEditorDocumentJson', () => {
   it('produces a schema-valid canonical empty document (the anchor-draft content)', () => {
     const doc = emptyEditorDocumentJson()
     expect(DocumentJsonSchema.safeParse(doc).success).toBe(true)
-    expect(doc).toEqual({ version: '1.0', variables: [], content: [], library: [] })
+    expect(doc).toEqual({
+      version: LATEST_DOCUMENT_JSON_VERSION,
+      variables: [],
+      content: [],
+      library: [],
+    })
   })
 })
 
@@ -1086,5 +1414,197 @@ describe('withDocumentMeta', () => {
     const roundTripped = roundTrip(doc)
     expect(roundTripped.meta).toBeUndefined()
     expect(JSON.stringify(roundTripped)).toBe(JSON.stringify(emptyEditorDocumentJson()))
+  })
+})
+
+// ── Inline links (v1.1, #72) ────────────────────────────────────────────────
+
+describe('inline link nodes (schema v1.1)', () => {
+  const KURS_ID = '11111111-1111-4111-8111-111111111111'
+  const UNIT_ID = '22222222-2222-4222-8222-222222222222'
+  const DOC_ID = '33333333-3333-4333-8333-333333333333'
+
+  const linked = (target: unknown) => ({
+    version: '1.1',
+    variables: [],
+    content: [
+      { type: 'paragraph', children: ['siehe ', { type: 'link', target, label: 'Aufgabe 2' }] },
+    ],
+  })
+
+  it('accepts a link node on a v1.1 document', () => {
+    expect(DocumentJsonSchema.safeParse(linked({ docId: DOC_ID })).success).toBe(true)
+    expect(DocumentJsonSchema.safeParse(linked({ kursId: KURS_ID })).success).toBe(true)
+    expect(DocumentJsonSchema.safeParse(linked({ unitId: UNIT_ID })).success).toBe(true)
+    expect(DocumentJsonSchema.safeParse(linked({ docId: DOC_ID, anchorId: 'anc_a' })).success).toBe(
+      true
+    )
+  })
+
+  it('rejects a link node on a v1.0 document — the version discriminator means something', () => {
+    // Same rule the anchor follows: links arrived WITH 1.1, so a v1.0 snapshot
+    // claiming one is refused rather than read as a shape its version lacks.
+    expect(DocumentJsonSchema.safeParse({ ...linked({ docId: DOC_ID }), version: '1.0' }).success).toBe(
+      false
+    )
+  })
+
+  it('rejects a link hidden inside a styled group of a v1.0 document', () => {
+    // The `children` group recurses into its OWN version's inline union — the
+    // reason the schema is built per version rather than shared and extended.
+    const nested = {
+      version: '1.0',
+      variables: [],
+      content: [
+        {
+          type: 'paragraph',
+          children: [{ children: [{ type: 'link', target: { docId: DOC_ID }, label: 'x' }] }],
+        },
+      ],
+    }
+    expect(DocumentJsonSchema.safeParse(nested).success).toBe(false)
+    expect(DocumentJsonSchema.safeParse({ ...nested, version: '1.1' }).success).toBe(true)
+  })
+
+  it('accepts links in every inline position — headings, list items, captions', () => {
+    const link = { type: 'link', target: { unitId: UNIT_ID }, label: 'Einheit 3' }
+    const doc = {
+      version: '1.1',
+      variables: [],
+      content: [
+        { type: 'heading', level: 1, children: [link] },
+        { type: 'list', ordered: false, items: [[link]] },
+        { type: 'formula', latex: 'x', caption: { children: [link] } },
+      ],
+    }
+    expect(DocumentJsonSchema.safeParse(doc).success).toBe(true)
+  })
+
+  it('rejects a draft-shaped or malformed target at the boundary', () => {
+    expect(DocumentJsonSchema.safeParse(linked({ draftId: DOC_ID })).success).toBe(false)
+    expect(DocumentJsonSchema.safeParse(linked({ docId: 'entwurf-7' })).success).toBe(false)
+    expect(DocumentJsonSchema.safeParse(linked({ anchorId: 'anc_a' })).success).toBe(false)
+    expect(DocumentJsonSchema.safeParse(linked({})).success).toBe(false)
+  })
+
+  it('imports a link as a contenteditable=false chip carrying the target', () => {
+    const editor = makeEditor()
+    importEditorJson(parse(linked({ docId: DOC_ID, anchorId: 'anc_a' })), editor, makeAdapters())
+    const chip = editor.querySelector<HTMLElement>('.doc-link')!
+    expect(chip.textContent).toBe('Aufgabe 2')
+    expect(chip.getAttribute('contenteditable')).toBe('false')
+    expect(chip.dataset['linkKind']).toBe('document')
+    expect(chip.dataset['linkId']).toBe(DOC_ID)
+    expect(chip.dataset['linkAnchorId']).toBe('anc_a')
+    editor.remove()
+  })
+
+  it('serializes a chip back to one link node, not to its text', () => {
+    const editor = makeEditor()
+    editor.innerHTML =
+      '<p>siehe <span class="doc-link" contenteditable="false" ' +
+      `data-link-kind="unit" data-link-id="${UNIT_ID}">Einheit 3</span></p>`
+    expect(serializeEditorState(editor, []).content[0]).toEqual({
+      type: 'paragraph',
+      children: ['siehe ', { type: 'link', target: { unitId: UNIT_ID }, label: 'Einheit 3' }],
+    })
+    editor.remove()
+  })
+
+  it('emits the link keys in the schema’s order — type, target, label', () => {
+    const editor = makeEditor()
+    editor.innerHTML = `<p><span class="doc-link" data-link-kind="kurs" data-link-id="${KURS_ID}">K</span></p>`
+    const block = serializeEditorState(editor, []).content[0] as { children: unknown[] }
+    expect(Object.keys(block.children[0] as object)).toEqual(['type', 'target', 'label'])
+    editor.remove()
+  })
+
+  it('degrades a chip with no usable target to plain text rather than dropping it', () => {
+    // An unfollowable node must not enter the JSON — but the sentence still
+    // has to read, so the label survives as text.
+    const editor = makeEditor()
+    editor.innerHTML =
+      '<p>vgl. <span class="doc-link" data-link-kind="document" data-link-id="">Aufgabe 2</span></p>'
+    expect(serializeEditorState(editor, []).content[0]).toEqual({
+      type: 'paragraph',
+      children: ['vgl. ', { text: 'Aufgabe 2' }],
+    })
+    editor.remove()
+  })
+
+  it('is byte-stable through export → import → export', () => {
+    const editor = makeEditor()
+    importEditorJson(
+      parse({
+        version: '1.1',
+        variables: [],
+        content: [
+          {
+            type: 'paragraph',
+            children: [
+              'siehe ',
+              { type: 'link', target: { docId: DOC_ID, anchorId: 'anc_a' }, label: 'Herleitung' },
+              ' und ',
+              { type: 'link', target: { kursId: KURS_ID }, label: 'den Kurs' },
+            ],
+          },
+          {
+            type: 'heading',
+            level: 2,
+            children: [{ type: 'link', target: { unitId: UNIT_ID }, label: 'Einheit 3' }],
+            anchor: { id: 'anc_h', label: 'Verweise' },
+          },
+        ],
+      }),
+      editor,
+      makeAdapters()
+    )
+    const j1 = serializeEditorState(editor, [])
+    expect(DocumentJsonSchema.safeParse(j1).success).toBe(true)
+    expect(JSON.stringify(roundTrip(j1))).toBe(JSON.stringify(j1))
+    editor.remove()
+  })
+})
+
+// ── Sprungmarken of a published document (#72) ──────────────────────────────
+
+describe('collectDocumentAnchors', () => {
+  const doc = (content: unknown[]) => parse({ version: '1.1', variables: [], content })
+
+  it('lists the anchors in content order', () => {
+    const anchors = collectDocumentAnchors(
+      doc([
+        { type: 'paragraph', children: ['a'] },
+        { type: 'heading', level: 1, children: ['b'], anchor: { id: 'anc_2', label: 'Zwei' } },
+        { type: 'formula', latex: 'x', anchor: { id: 'anc_1', label: 'Eins' } },
+      ])
+    )
+    expect(anchors).toEqual([
+      { id: 'anc_2', label: 'Zwei' },
+      { id: 'anc_1', label: 'Eins' },
+    ])
+  })
+
+  it('is empty for a document nobody marked', () => {
+    expect(collectDocumentAnchors(doc([{ type: 'paragraph', children: ['a'] }]))).toEqual([])
+  })
+
+  it('lists a duplicated id once — a picker offering one target twice would lie', () => {
+    const anchors = collectDocumentAnchors(
+      doc([
+        { type: 'paragraph', children: ['a'], anchor: { id: 'anc_1', label: 'Erste' } },
+        { type: 'paragraph', children: ['b'], anchor: { id: 'anc_1', label: 'Kopie' } },
+      ])
+    )
+    expect(anchors).toEqual([{ id: 'anc_1', label: 'Erste' }])
+  })
+
+  it('reads an upgraded v1.0 snapshot as having none', () => {
+    const v10 = parse({
+      version: '1.0',
+      variables: [],
+      content: [{ type: 'paragraph', children: ['a'] }],
+    })
+    expect(collectDocumentAnchors(v10)).toEqual([])
   })
 })

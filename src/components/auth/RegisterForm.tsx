@@ -194,6 +194,15 @@ export function RegisterForm() {
           >
             {pending ? 'Creating account...' : 'Create account'}
           </button>
+
+          {/* Said BEFORE the button is pressed, not only afterwards on the
+              sign-in page: the confirmation step is the one thing about this
+              form that does not happen on screen, and a student who does not
+              expect it reads the failed sign-in that follows as a wrong
+              password. */}
+          <p className="text-sm leading-snug text-gray-500">
+            We&rsquo;ll email you a confirmation link. Open it before your first sign-in.
+          </p>
         </form>
       )}
 

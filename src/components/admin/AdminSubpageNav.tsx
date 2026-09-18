@@ -1,13 +1,14 @@
 import Link from 'next/link'
 
-type Tab = 'kurse' | 'units' | 'tasks' | 'documents' | 'editor'
+type Tab = 'kurse' | 'units' | 'tasks' | 'documents' | 'editor' | 'lernseiten'
 
 const TABS: { id: Tab; label: string; href: string }[] = [
-  { id: 'kurse',     label: 'Kurs',     href: '/admin/kurse/new' },
-  { id: 'units',     label: 'Unit',     href: '/admin/units/new' },
-  { id: 'tasks',     label: 'Task',     href: '/admin/tasks/new' },
-  { id: 'documents', label: 'Dokument', href: '/admin/documents/new' },
-  { id: 'editor',    label: 'Editor',   href: '/admin/editor' },
+  { id: 'kurse',      label: 'Kurs',      href: '/admin' },
+  { id: 'units',      label: 'Unit',      href: '/admin/units/new' },
+  { id: 'tasks',      label: 'Task',      href: '/admin/tasks/new' },
+  { id: 'documents',  label: 'Dokument',  href: '/admin/documents/new' },
+  { id: 'editor',     label: 'Editor',    href: '/admin/editor' },
+  { id: 'lernseiten', label: 'Lernseite', href: '/admin/lernseiten' },
 ]
 
 export function AdminSubpageNav({ active }: { active: Tab }) {

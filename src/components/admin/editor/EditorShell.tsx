@@ -4,14 +4,13 @@ import { useRouter } from 'next/navigation'
 import { useEffect, useRef, useState, useTransition } from 'react'
 import { createEditorDraft, updateEditorDraft, uploadEditorImage } from '@/actions/admin'
 import { createEditorController, type EditorController } from '@/lib/editor/controller'
-import {
-  DocumentJsonSchema,
-  withDocumentMeta,
-  type EditorDocumentJson,
-} from '@/lib/editor/document-json'
+import { withDocumentMeta, type LatestEditorDocumentJson } from '@/lib/editor/document-json'
+import { readDocumentJson } from '@/lib/editor/document-version'
+import type { LinkPickRequest, LinkPickResult } from '@/lib/editor/links'
 import type { EditorTargetKurs } from '@/types'
 import { EditorToolbar } from './EditorToolbar'
 import { ExportBar } from './ExportBar'
+import { LinkTargetPicker } from './LinkTargetPicker'
 
 /**
  * React shell of the LaTeX editor (PRD #28, Approach C).
@@ -85,11 +84,16 @@ export function EditorShell({
   // draft) — a router.refresh() re-render must never re-import over live
   // editing state. Invalid content becomes an error status instead of a
   // broken editor.
-  const [parsedDraft] = useState<EditorDocumentJson | 'invalid' | null>(() => {
+  // Upgrade-on-read (#64): a stored draft may carry any supported version;
+  // the controller only ever receives the newest. A snapshot that cannot be
+  // read is refused whole, with the boundary's own German reason.
+  const [parsedDraft] = useState<LatestEditorDocumentJson | { invalid: string } | null>(() => {
     if (!initialDraft) return null
-    const parsed = DocumentJsonSchema.safeParse(initialDraft.content)
-    return parsed.success ? parsed.data : 'invalid'
+    const parsed = readDocumentJson(initialDraft.content)
+    return parsed.ok ? parsed.doc : { invalid: parsed.error }
   })
+  const draftError = parsedDraft !== null && 'invalid' in parsedDraft ? parsedDraft.invalid : null
+  const draftDocument = parsedDraft !== null && !('invalid' in parsedDraft) ? parsedDraft : null
 
   const [title, setTitle] = useState(initialDraft?.title ?? 'Unbenannt')
   // ExportBar Term field (slice 10) — the only draft-persisted export state
@@ -97,11 +101,11 @@ export function EditorShell({
   // reach this state, so an imported meta.term is ignored until the draft is
   // saved and reopened (documented limitation).
   const [term, setTerm] = useState(() =>
-    parsedDraft && parsedDraft !== 'invalid' ? (parsedDraft.meta?.term ?? '') : ''
+    draftDocument?.meta?.term ?? ''
   )
   const [status, setStatus] = useState<SaveStatus>(() =>
-    parsedDraft === 'invalid'
-      ? { kind: 'error', text: 'Entwurf konnte nicht geladen werden: ungültiges Dokumentformat.' }
+    draftError !== null
+      ? { kind: 'error', text: `Entwurf konnte nicht geladen werden: ${draftError}` }
       : { kind: 'idle', text: '' }
   )
   const [isPending, startTransition] = useTransition()
@@ -110,6 +114,11 @@ export function EditorShell({
   // Steuerung meldet sie bei jedem selectionchange; React spiegelt sie in die
   // Größen-Dropdown der Toolbar. Setzen mit gleichem Wert ist ein No-op-Render.
   const [selectionFontSize, setSelectionFontSize] = useState('')
+
+  // Link picker (#72). The controller awaits a target, so the resolver of that
+  // pending promise is held here until the dialog closes one way or another.
+  const [linkRequest, setLinkRequest] = useState<LinkPickRequest | null>(null)
+  const linkResolveRef = useRef<((result: LinkPickResult | null) => void) | null>(null)
 
   // Serializes every draft-mutating server call (image uploads and saves).
   // Kept never-rejecting so one failed operation cannot wedge the chain.
@@ -153,23 +162,45 @@ export function EditorShell({
     }
   }
 
+  // Controller hook (#72): the link picker is React because its tree is server
+  // data, so the controller asks for a target and waits. Touches only refs and
+  // stable setters, like uploadImage — the mount-time closure stays valid.
+  function pickLinkTarget(request: LinkPickRequest): Promise<LinkPickResult | null> {
+    // A picker already open loses: it can only be a leftover from a request
+    // nothing is waiting on any more, and leaving its promise unresolved would
+    // wedge the controller's await forever.
+    linkResolveRef.current?.(null)
+    setLinkRequest(request)
+    return new Promise((resolve) => {
+      linkResolveRef.current = resolve
+    })
+  }
+
+  function closeLinkPicker(result: LinkPickResult | null) {
+    const resolve = linkResolveRef.current
+    linkResolveRef.current = null
+    setLinkRequest(null)
+    resolve?.(result)
+  }
+
   useEffect(() => {
     if (!mountRef.current) return
     const controller = createEditorController(
       mountRef.current,
-      { uploadImage },
+      { uploadImage, pickLinkTarget },
       { onSelectionFontSize: setSelectionFontSize }
     )
     controllerRef.current = controller
-    if (parsedDraft && parsedDraft !== 'invalid') {
-      void controller.loadDocument(parsedDraft)
+    if (draftDocument) {
+      void controller.loadDocument(draftDocument)
     }
     return () => {
       controller.destroy()
       controllerRef.current = null
     }
     // parsedDraft is stable for the lifetime of this mount (never set), and
-    // uploadImage reads only refs — the mount-time closure stays valid.
+    // both hooks read only refs and stable setters — the mount-time closure
+    // stays valid.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [parsedDraft])
 
@@ -324,6 +355,15 @@ export function EditorShell({
       />
       {/* Imperative mount point — must stay childless in JSX (see PRD #28). */}
       <div ref={mountRef} />
+      {/* Keyed by nothing: the dialog is created fresh per request, so its
+          label and expansion state never leak from one link to the next. */}
+      {linkRequest && (
+        <LinkTargetPicker
+          request={linkRequest}
+          targetTree={targetTree}
+          onClose={closeLinkPicker}
+        />
+      )}
     </div>
   )
 }

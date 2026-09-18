@@ -9,11 +9,21 @@ export type DocumentFileRef = {
   document_images?: { file_path: string }[]
 }
 
+// Every stored object a set of Documents owns — the single source of truth for
+// all four cascade-delete paths (document, task, unit, kurs).
+//
+// Two document kinds own document_images: an `image_collection` (its uploaded
+// pages) and, since #66, an `interactive` document (the copies publishing
+// re-homed out of the draft). Both must be swept, or deleting the document
+// leaves their objects orphaned in the bucket forever — the rows cascade, the
+// storage objects do not.
+const KINDS_WITH_OWNED_IMAGES = new Set(['image_collection', 'interactive'])
+
 export function collectStoragePaths(documents: DocumentFileRef[]): string[] {
   return documents.flatMap((d) => {
     const paths: string[] = []
     if (d.file_path) paths.push(d.file_path)
-    if (d.file_type === 'image_collection') {
+    if (KINDS_WITH_OWNED_IMAGES.has(d.file_type)) {
       paths.push(...(d.document_images ?? []).map((i) => i.file_path))
     }
     return paths
@@ -36,11 +46,12 @@ export function parseForm<T>(
 }
 
 export function revalidateAdminPages() {
-  revalidatePath('/admin/kurse/new')
+  revalidatePath('/admin/kurse')
   revalidatePath('/admin/units/new')
   revalidatePath('/admin/tasks/new')
   revalidatePath('/admin/documents/new')
   revalidatePath('/admin/editor')
+  revalidatePath('/admin/lernseiten')
   revalidatePath('/', 'layout')
 }
 

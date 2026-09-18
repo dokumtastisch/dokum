@@ -468,7 +468,127 @@
   border-color: #fca5a5;
 }
 
+/* ------------------------------------------------------- Link-Chips (#72) */
+/* Wie die Input/Output-Pillen ein Atom: contenteditable="false", also kann der
+   Cursor die Beschriftung nicht von ihrem Ziel trennen. Ein Klick öffnet den
+   Ziel-Picker (controller.ts, onEditorClick).
+   Nur die AUTORENSEITE: der Student-Renderer benutzt zwar denselben Importer
+   und erzeugt daher dieselben Chips, hat aber sein eigenes, auf
+   `.dokum-document` begrenztes Stylesheet — dort landet der Chip mit #73. */
+
+.latex-editor .doc-link {
+  display: inline-block;
+  padding: 2px 8px;
+  margin: 0 2px;
+  border-radius: 999px;
+  cursor: pointer;
+  user-select: none;
+  font-weight: 500;
+  font-size: 0.92em;
+  background: #eef2ff;
+  color: #3730a3;
+  border: 1px solid #c7d2fe;
+  transition: filter 0.1s;
+}
+
+.latex-editor .doc-link:hover {
+  filter: brightness(0.96);
+}
+
+/* Das Zielsymbol ist CSS-Chrome, kein Inhalt: es steht in keinem textContent
+   und kann deshalb nie in einer gespeicherten Beschriftung landen. Reihenfolge
+   zählt — die Sprungmarke gewinnt gegen das allgemeine Dokument.
+   ⚠ Zweite Kopie von LINK_KIND_ICON / LINK_ANCHOR_ICON (lib/editor/links.ts),
+   den der Picker liest: ein ::before kann die Map nicht lesen, also müssen
+   beide Seiten gemeinsam geändert werden.
+   Das Trennzeichen ist ein geschütztes Leerzeichen (#100): sonst darf die Zeile
+   zwischen Symbol und Beschriftung umbrechen und das Symbol bleibt als eigener
+   leerer Chip zurück. Spiegelt interactive-document.css. */
+.latex-editor .doc-link[data-link-kind='kurs']::before {
+  content: '📘\00a0';
+}
+
+.latex-editor .doc-link[data-link-kind='unit']::before {
+  content: '📗\00a0';
+}
+
+.latex-editor .doc-link[data-link-kind='document']::before {
+  content: '📄\00a0';
+}
+
+.latex-editor .doc-link[data-link-anchor-id]::before {
+  content: '⚓\00a0';
+}
+
+/* ------------------------------------------------- Sprungmarken (#71) */
+/* Editor-Chrome, rein visuell: das Badge ist ein Pseudo-Element, also für den
+   Serializer unsichtbar (er liest nur data-anchor-id/-label) und ohne
+   Auswirkung auf die contenteditable-Bearbeitung. */
+
+.latex-editor #editor [data-anchor-id] {
+  position: relative;
+}
+
+/* #94: das Badge sitzt INNERHALB der Oberkante seines Blocks. Zuvor stand es
+   mittig auf der Grenze zum Block darüber (top: -2px + translateY(-50%)) —
+   bei zwei markierten Blöcken nacheinander war nicht mehr erkennbar, welches
+   Badge zu welchem Block gehört. Horizontal ragt es weiter über den rechten
+   Rand hinaus, damit es den Text der ersten Zeile nicht überdeckt; der Editor
+   hat dort 42px Innenabstand. */
+.latex-editor #editor [data-anchor-id]::after {
+  content: '⚓ ' attr(data-anchor-label);
+  position: absolute;
+  top: 2px;
+  right: -6px;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
+  user-select: none;
+  padding: 1px 7px;
+  border: 1px solid #c7d2fe;
+  border-radius: 999px;
+  background: #eef2ff;
+  color: #3730a3;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+/* Formel- und Bildblöcke scrollen horizontal (overflow-x: auto) und schneiden
+   deshalb alles ab, was über ihren Rand hinausragt — dort muss das Badge nach
+   innen. Im Bildblock sitzt oben rechts zusätzlich das Lösch-✕ (24px bei
+   right: 8px), an dem es vorbeirücken muss. */
+.latex-editor #editor .formula-block[data-anchor-id]::after {
+  right: 6px;
+}
+
+.latex-editor #editor .image-block[data-anchor-id]::after {
+  right: 38px;
+}
+
+/* #92: per Klick auf den Ziehgriff ausgewählter Block. Formel- und Bildblöcke
+   tragen keinen Cursor, also braucht die ⚓-Schaltfläche eine sichtbare
+   Auswahl, auf die sie wirken kann. `outline` statt `border`: es verändert das
+   Layout nicht und stört damit weder Drag & Drop noch den PNG-Export. */
+.latex-editor #editor .block-selected {
+  outline: 2px solid var(--editor-accent);
+  outline-offset: 2px;
+}
+
 /* Exportmodus: Felder als normaler Text rendern (slice 10) */
+/* Das Sprungmarken-Badge ist Editor-Chrome und darf nicht ins PNG (wie die
+   drag-handles und das Bild-Lösch-✕, die png-export.ts ausblendet). */
+.latex-editor .exporting [data-anchor-id]::after {
+  display: none !important;
+}
+
+/* Ebenso die Blockauswahl (#92) — reine Editor-Chrome. */
+.latex-editor .exporting .block-selected {
+  outline: none !important;
+}
+
 .latex-editor .exporting .formula-block {
   padding-left: 22px !important;
 }

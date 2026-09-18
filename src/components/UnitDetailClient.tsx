@@ -1,7 +1,12 @@
 'use client'
 
-import { useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import type { Task, DocumentWithImages } from '@/types'
+import { DocumentBody } from '@/components/documents/DocumentBody'
+import { DocumentLink } from '@/components/documents/DocumentLink'
+import { useRegisterDocumentReveal } from '@/components/kurse/document-reveal'
+import { documentAnchorId, REVEAL_UNFOLD_MS } from '@/lib/document-anchor'
+import { documentViewKind } from '@/lib/document-view'
 import Lightbox from 'yet-another-react-lightbox'
 import Zoom from 'yet-another-react-lightbox/plugins/zoom'
 import 'yet-another-react-lightbox/styles.css'
@@ -23,42 +28,63 @@ function trackMiniCase(docId: string) {
   document.cookie = `recent_minicases=${encodeURIComponent(next.join(','))}; path=/; max-age=${60 * 60 * 24 * 30}`
 }
 
-function Watermark({ id }: { id: string }) {
-  return (
-    <div
-      aria-hidden="true"
-      style={{
-        position: 'absolute', inset: 0,
-        overflow: 'hidden', userSelect: 'none',
-        cursor: 'default',
-      }}
-    >
-      {Array.from({ length: 24 }, (_, i) => (
-        <span
-          key={i}
-          style={{
-            position: 'absolute',
-            top: `${(Math.floor(i / 4) * 22) + 5}%`,
-            left: `${((i % 4) * 28) - 8}%`,
-            transform: 'rotate(-35deg)',
-            fontFamily: 'monospace',
-            fontSize: '13px',
-            fontWeight: 'bold',
-            color: 'rgba(0,0,0,0.08)',
-            whiteSpace: 'nowrap',
-            mixBlendMode: 'multiply',
-          }}
-        >
-          {id}
-        </span>
-      ))}
-    </div>
-  )
-}
-
 export default function UnitDetailClient({ tasks, openTaskId, watermarkId }: { tasks: TaskWithDocs[]; openTaskId?: string; watermarkId: string }) {
   const [openTaskIds, setOpenTaskIds] = useState<Set<string>>(openTaskId ? new Set([openTaskId]) : new Set())
   const [lightbox, setLightbox] = useState<LightboxState | null>(null)
+
+  // `openTaskId` is not only a deep link. Its two producers — the back link on
+  // /dokumente/[docId] and RecentMiniCases — are soft navigations that can land
+  // on an Einheit whose accordion is ALREADY MOUNTED, changing this prop without
+  // remounting the component. Without the adjustment below, the initial state
+  // above would be the only time the prop was ever read.
+  //
+  // Adjusted during render rather than in an effect (React's documented
+  // prop-change pattern): the accordion is not an external system, and an
+  // effect would paint the old state once before opening.
+  //
+  // It only ever OPENS. A student who collapsed the Aufgabe they arrived
+  // through should not have it spring back open on an unrelated re-render,
+  // which is exactly what re-deriving from the prop each time would do.
+  const [lastOpenedTaskId, setLastOpenedTaskId] = useState(openTaskId)
+  if (openTaskId && openTaskId !== lastOpenedTaskId) {
+    setLastOpenedTaskId(openTaskId)
+    setOpenTaskIds((prev) => (prev.has(openTaskId) ? prev : new Set(prev).add(openTaskId)))
+  }
+
+  // The accordion's half of the sidebar channel (#106): unfold the Aufgabe that
+  // holds this Dokument, then scroll to it. Nothing navigates and nothing opens
+  // — the Dokument is already rendered right here.
+  //
+  // The wait is the accordion's own animation. `grid-template-rows` goes 0fr →
+  // 1fr over 300ms below, and an element measured mid-expansion scrolls to the
+  // wrong offset; when the Aufgabe was already unfolded there is nothing to wait
+  // for and the scroll happens on the spot.
+  const register = useRegisterDocumentReveal()
+  const reveal = useCallback(
+    (docId: string) => {
+      const task = tasks.find((t) => t.documents.some((d) => d.id === docId))
+      if (!task) return
+
+      // Read from state, NOT from inside an updater: React does not run the
+      // updater at dispatch time, so a `wasOpen` assigned in there would still
+      // hold its initial value by the time the timeout below is scheduled.
+      const wasOpen = openTaskIds.has(task.id)
+      if (!wasOpen) {
+        task.documents.forEach((doc) => trackMiniCase(doc.id))
+        setOpenTaskIds((prev) => new Set(prev).add(task.id))
+      }
+
+      window.setTimeout(
+        () =>
+          document
+            .getElementById(documentAnchorId(docId))
+            ?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
+        wasOpen ? 0 : REVEAL_UNFOLD_MS
+      )
+    },
+    [tasks, openTaskIds]
+  )
+  useEffect(() => register(reveal), [register, reveal])
 
   function toggleTask(taskId: string, docs: DocumentWithImages[]) {
     setOpenTaskIds((prev) => {
@@ -123,81 +149,57 @@ export default function UnitDetailClient({ tasks, openTaskId, watermarkId }: { t
                     <p className="px-3 text-xs text-gray-400">No documents yet.</p>
                   ) : (
                     <ul className="space-y-1">
-                      {task.documents.map((doc) => (
-                        <li
-                          key={doc.id}
-                          className="rounded-md border border-gray-100 bg-gray-50 px-3 py-2"
-                        >
-                          {doc.file_type === 'image_collection' ? (
-                            <div>
-                              <p className="text-sm font-medium text-gray-800">{doc.title}</p>
-                              {doc.description && (
-                                <p className="text-xs text-gray-500">{doc.description}</p>
-                              )}
-                              <div className="mt-2 grid grid-cols-1 gap-2">
-                                {(doc.document_images ?? []).map((img) => (
-                                  <div key={img.id} className="mt-1 flex w-full justify-center">
-                                    <div
-                                      className="relative inline-block rounded-md overflow-hidden max-w-full"
-                                      onContextMenu={(e) => e.preventDefault()}
-                                    >
-                                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                                    <img
-                                      src={`/api/image/${img.id}`}
-                                      alt={doc.title}
-                                      className="block max-w-full max-h-[400px] select-none"
-                                      style={{ pointerEvents: 'none', userSelect: 'none', WebkitUserDrag: 'none' } as React.CSSProperties}
-                                      draggable={false}
-                                    />
-                                    <Watermark id={watermarkId} />
-                                    </div>
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          ) : doc.file_type === 'image' ? (
-                            <div>
-                              <p className="text-sm font-medium text-gray-800">{doc.title}</p>
-                              {doc.description && (
-                                <p className="text-xs text-gray-500">{doc.description}</p>
-                              )}
-                              <div className="mt-2 flex w-full justify-center">
-                                <div
-                                  className="relative inline-block max-w-full overflow-hidden rounded-md"
-                                  onContextMenu={(e) => e.preventDefault()}
-                                >
-                                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                                  <img
-                                    src={`/api/file/${doc.id}`}
-                                    alt={doc.title}
-                                    className="block max-w-full max-h-[600px] select-none"
-                                    style={{ pointerEvents: 'none', userSelect: 'none', WebkitUserDrag: 'none' } as React.CSSProperties}
-                                    draggable={false}
-                                  />
-                                  <Watermark id={watermarkId} />
+                      {task.documents.map((doc) => {
+                        // The body of every document kind lives in
+                        // DocumentBody, shared with the full-page route (#69).
+                        // Only the layout around it differs here: a PDF puts
+                        // its button beside the title, everything else stacks.
+                        const heading = (
+                          <div>
+                            <p className="text-sm font-medium text-gray-800">{doc.title}</p>
+                            {doc.description && (
+                              <p className="text-xs text-gray-500">{doc.description}</p>
+                            )}
+                            {/* Opens on top of this Unit page rather than
+                                replacing it (#70) — the accordion, and every
+                                value a student has typed into a document in
+                                it, is still here underneath. */}
+                            <DocumentLink
+                              docId={doc.id}
+                              className="mt-0.5 inline-block text-xs text-gray-400 hover:text-brand"
+                            >
+                              Open on its own page ↗
+                            </DocumentLink>
+                          </div>
+                        )
+                        return (
+                          <li
+                            key={doc.id}
+                            // What the Kurs sidebar scrolls to (#106). The
+                            // scroll margin keeps the sticky navbar from
+                            // covering the row it just landed on.
+                            id={documentAnchorId(doc.id)}
+                            className="scroll-mt-20 rounded-md border border-gray-100 bg-gray-50 px-3 py-2"
+                          >
+                            {documentViewKind(doc) === 'file' ? (
+                              <div className="flex items-center justify-between gap-4">
+                                {heading}
+                                {/* The accordion's scale, applied by the
+                                    accordion: the button inherits text-xs and
+                                    the wrapper keeps it from being squeezed. */}
+                                <div className="shrink-0 text-xs">
+                                  <DocumentBody doc={doc} watermarkId={watermarkId} />
                                 </div>
                               </div>
-                            </div>
-                          ) : (
-                            <div className="flex items-center justify-between gap-4">
+                            ) : (
                               <div>
-                                <p className="text-sm font-medium text-gray-800">{doc.title}</p>
-                                {doc.description && (
-                                  <p className="text-xs text-gray-500">{doc.description}</p>
-                                )}
+                                {heading}
+                                <DocumentBody doc={doc} watermarkId={watermarkId} />
                               </div>
-                              <a
-                                href={`/api/file/${doc.id}`}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="shrink-0 rounded-md border border-brand px-3 py-1.5 text-xs font-medium text-brand hover:bg-brand/5 transition-colors btn-brand"
-                              >
-                                Open PDF ↗
-                              </a>
-                            </div>
-                          )}
-                        </li>
-                      ))}
+                            )}
+                          </li>
+                        )
+                      })}
                     </ul>
                   )}
                 </div>

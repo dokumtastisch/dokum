@@ -5,7 +5,11 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { createDocument, updateDocument } from '@/actions/admin'
 import type { Task, Unit, Kurs } from '@/types'
+// Aliased: the global DOM `Document` is in scope in a client component, and an
+// unaliased import would shadow it in a file that also touches the DOM.
+import type { Document as DokumentRow } from '@/types'
 import type { ActionResult } from '@/types'
+import { METADATA_ONLY_FILE_TYPES } from '@/lib/document-view'
 
 type FormState = ActionResult | null
 
@@ -13,12 +17,29 @@ const initialState: FormState = null
 
 type TaskWithUnit = Task & { units: Unit & { kurse: Pick<Kurs, 'title'> } }
 
+/**
+ * The kinds this form can actually upload — `interactive` is authored in the
+ * editor, `lesson` in the Lernseiten workspace (#107).
+ */
+type UploadableType = 'pdf' | 'image' | 'image_collection'
+
+/**
+ * Narrows a stored file_type to one the type selector can stand on. Everything
+ * else falls back to 'pdf', which is only ever read on the create path — the
+ * selector and the file input are hidden while editing a metadata-only kind.
+ */
+function isUploadable(
+  fileType: DokumentRow['file_type'] | undefined
+): fileType is UploadableType {
+  return fileType === 'pdf' || fileType === 'image' || fileType === 'image_collection'
+}
+
 type DefaultValues = {
   title: string
   description: string | null
   position: number
   file_path?: string | null
-  file_type?: 'pdf' | 'image' | 'image_collection'
+  file_type?: DokumentRow['file_type']
 }
 
 export function DocumentForm({
@@ -36,8 +57,11 @@ export function DocumentForm({
 }) {
   const router = useRouter()
   const [fileError, setFileError] = useState<string | null>(null)
-  const [docType, setDocType] = useState<'pdf' | 'image' | 'image_collection'>(
-    defaultValues?.file_type ?? 'pdf'
+  // Only ever read on the create path (the type selector and file input are
+  // hidden while editing a metadata-only kind), so an `interactive` default
+  // just falls back to the same 'pdf' the create form starts on.
+  const [docType, setDocType] = useState<UploadableType>(
+    isUploadable(defaultValues?.file_type) ? defaultValues.file_type : 'pdf'
   )
   const [state, action, pending] = useActionState(
     async (_prev: FormState, formData: FormData): Promise<FormState> => {
@@ -61,7 +85,13 @@ export function DocumentForm({
     setFileError(null)
   }
 
-  const isEditingCollection = editId && defaultValues?.file_type === 'image_collection'
+  // Kinds whose file `updateDocument` refuses to replace — the form must not
+  // offer an upload the action silently discards while reporting success
+  // (#86). The list and the reasoning now live in ONE place that both this
+  // form and the server action read, instead of two that had to be kept in
+  // step by hand (see METADATA_ONLY_FILE_TYPES).
+  const editingFileType = editId ? defaultValues?.file_type : undefined
+  const isMetadataOnly = editingFileType !== undefined && METADATA_ONLY_FILE_TYPES.has(editingFileType)
 
   return (
     <form action={action} className="flex flex-col gap-5">
@@ -158,9 +188,11 @@ export function DocumentForm({
       )}
 
       {/* File input */}
-      {isEditingCollection ? (
+      {isMetadataOnly ? (
         <p className="text-xs text-gray-400 rounded-md border border-gray-200 bg-gray-50 px-3 py-2">
-          Bildsammlungen können derzeit nicht bearbeitet werden. Nur Titel, Beschreibung und Position sind änderbar.
+          {editingFileType === 'interactive'
+            ? 'Interaktive Dokumente werden im LaTeX-Editor bearbeitet und dort erneut veröffentlicht. Hier sind nur Titel, Beschreibung und Position änderbar.'
+            : 'Bildsammlungen können derzeit nicht bearbeitet werden. Nur Titel, Beschreibung und Position sind änderbar.'}
         </p>
       ) : docType === 'image_collection' ? (
         <div className="flex flex-col gap-1">
@@ -214,19 +246,11 @@ export function DocumentForm({
         </div>
       )}
 
-      <div className="flex flex-col gap-1">
-        <label htmlFor="doc-position" className="text-sm font-medium text-gray-700">
-          Position
-        </label>
-        <input
-          id="doc-position"
-          name="position"
-          type="number"
-          defaultValue={defaultValues?.position ?? 0}
-          className="w-24 rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand"
-        />
-        <p className="text-xs text-gray-400">Lower numbers appear first within the Task.</p>
-      </div>
+      {/* The order is dragged in the tree, not typed here — but `position` is
+          still what the schema reads, and `positionField` DEFAULTS TO 0. A form
+          that simply left the field out would send every edited Dokument to the
+          top of its Aufgabe. So the current value rides along hidden. */}
+      <input type="hidden" name="position" value={defaultValues?.position ?? 0} />
 
       <button
         type="submit"

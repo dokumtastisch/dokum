@@ -4,7 +4,8 @@ import { useActionState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { createKurs, updateKurs } from '@/actions/admin'
-import type { ActionResult } from '@/types'
+import type { ActionResult, KursSoldAs, KursType } from '@/types'
+import { MIN_PRICE_CENTS, UNIT_PRICE_DISPLAY } from '@/lib/constants'
 
 type FormState = ActionResult<{ id?: string }> | null
 
@@ -14,10 +15,26 @@ type DefaultValues = {
   title: string
   description: string | null
   position: number
-  published: boolean
+  kurs_type?: KursType
+  sold_as?: KursSoldAs
+  price_cents?: number
 }
 
-export function KursForm({ editId, defaultValues }: { editId?: string; defaultValues?: DefaultValues }) {
+export function KursForm({
+  editId,
+  defaultValues,
+  /**
+   * Called after a successful save (#108). The table renders this form inside
+   * a modal and uses it to close the dialog — which is also why the success
+   * panel below stays: without a handler (the standalone page), the panel is
+   * still the only feedback there is.
+   */
+  onSuccess,
+}: {
+  editId?: string
+  defaultValues?: DefaultValues
+  onSuccess?: () => void
+}) {
   const router = useRouter()
   const [state, action, pending] = useActionState(
     async (_prev: FormState, formData: FormData): Promise<FormState> => {
@@ -28,8 +45,10 @@ export function KursForm({ editId, defaultValues }: { editId?: string; defaultVa
   )
 
   useEffect(() => {
-    if (state?.ok === true) router.refresh()
-  }, [state?.ok, router])
+    if (state?.ok !== true) return
+    router.refresh()
+    onSuccess?.()
+  }, [state?.ok, router, onSuccess])
 
   return (
     <form action={action} className="flex flex-col gap-5">
@@ -38,7 +57,7 @@ export function KursForm({ editId, defaultValues }: { editId?: string; defaultVa
           {state.error}
         </p>
       )}
-      {state?.ok === true && (
+      {state?.ok === true && !onSuccess && (
         <div className="rounded-md border border-green-200 bg-green-50 px-3 py-3">
           <p className="text-sm font-medium text-green-800">
             {editId ? 'Kurs erfolgreich aktualisiert!' : 'Kurs erfolgreich angelegt!'}
@@ -103,19 +122,84 @@ export function KursForm({ editId, defaultValues }: { editId?: string; defaultVa
         <p className="text-xs text-gray-400">Lower numbers appear first. Ties are broken by creation time.</p>
       </div>
 
-      <div className="flex items-center gap-2">
-        <input
-          id="kurs-published"
-          name="published"
-          type="checkbox"
-          value="true"
-          defaultChecked={defaultValues?.published ?? false}
-          className="h-4 w-4 rounded border-gray-300"
-        />
-        <label htmlFor="kurs-published" className="text-sm font-medium text-gray-700">
-          Publish immediately
-        </label>
-      </div>
+      {/* ── Kursart und Verkauf (#107) ───────────────────────────────── */}
+      <fieldset className="rounded-md border border-gray-200 px-4 py-3">
+        <legend className="px-1 text-xs font-bold tracking-[0.08em] text-gray-400 uppercase">
+          Art und Verkauf
+        </legend>
+
+        <div className="flex flex-col gap-1">
+          <label htmlFor="kurs-type" className="text-sm font-medium text-gray-700">
+            Kursart
+          </label>
+          <select
+            id="kurs-type"
+            name="kurs_type"
+            defaultValue={defaultValues?.kurs_type ?? 'musterloesung'}
+            className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:ring-2 focus:ring-brand focus:outline-none"
+          >
+            <option value="musterloesung">Musterlösungen — Einheiten enthalten Lösungen</option>
+            <option value="lernkurs">Lernkurs — Einheiten sind Lernseiten</option>
+          </select>
+        </div>
+
+        <div className="mt-4 flex flex-col gap-1">
+          <label htmlFor="kurs-sold-as" className="text-sm font-medium text-gray-700">
+            Verkauft wird
+          </label>
+          <select
+            id="kurs-sold-as"
+            name="sold_as"
+            defaultValue={defaultValues?.sold_as ?? 'unit'}
+            className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:ring-2 focus:ring-brand focus:outline-none"
+          >
+            <option value="unit">Einzelne Einheiten</option>
+            <option value="kurs">Der ganze Kurs</option>
+          </select>
+          <p className="text-xs text-gray-400">
+            &bdquo;Der ganze Kurs&ldquo;: ein Kauf schaltet alle Einheiten frei &ndash; auch die, die du
+            sp&auml;ter hinzuf&uuml;gst.
+          </p>
+        </div>
+
+        {/* Der Kurspreis ist editierbar, der Einheitenpreis nicht: der h&auml;ngt an
+            einer festen Stripe-Price-ID (STRIPE_UNIT_PRICE_ID) und l&auml;sst sich
+            nur dort &auml;ndern. */}
+        <div className="mt-4 flex gap-4">
+          <div className="flex flex-col gap-1">
+            <label htmlFor="kurs-price" className="text-sm font-medium text-gray-700">
+              Kurspreis
+            </label>
+            <input
+              id="kurs-price"
+              name="price_euro"
+              type="number"
+              step="0.01"
+              min={MIN_PRICE_CENTS / 100}
+              defaultValue={(defaultValues?.price_cents ?? 1500) / 100}
+              className="w-28 rounded-md border border-gray-300 px-3 py-2 text-sm focus:ring-2 focus:ring-brand focus:outline-none"
+            />
+            <p className="text-xs text-gray-400">In Euro.</p>
+          </div>
+          <div className="flex flex-col gap-1">
+            <label htmlFor="unit-price" className="text-sm font-medium text-gray-700">
+              Preis je Einheit
+            </label>
+            <input
+              id="unit-price"
+              type="text"
+              disabled
+              value={UNIT_PRICE_DISPLAY}
+              className="w-28 cursor-not-allowed rounded-md border border-gray-300 bg-gray-50 px-3 py-2 text-sm"
+            />
+            <p className="text-xs text-gray-400">Fest in Stripe.</p>
+          </div>
+        </div>
+        <p className="mt-2 text-xs text-gray-400">
+          Wirksam ist immer nur einer der beiden: der Kurspreis bei &bdquo;Der ganze Kurs&ldquo;,
+          der Einheitenpreis bei &bdquo;Einzelne Einheiten&ldquo;.
+        </p>
+      </fieldset>
 
       <button
         type="submit"

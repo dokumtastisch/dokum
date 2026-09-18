@@ -61,7 +61,7 @@ export async function proxy(request: NextRequest) {
     const url = request.nextUrl.clone()
     url.pathname = '/auth/login'
     if (pathname.startsWith('/api/pdf/') || pathname.startsWith('/api/file/') || pathname.startsWith('/api/image/')) {
-      url.searchParams.set('message', 'Bitte melde dich an/registriere dich, um auf dieses Dokument zuzugreifen.')
+      url.searchParams.set('notice', 'sign-in-required')
     }
     return NextResponse.redirect(url)
   }

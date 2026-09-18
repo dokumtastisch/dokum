@@ -184,6 +184,30 @@ export function EditorToolbar({
         <button type="button" onClick={() => ctrl()?.insertOutputField()}>
           ☑ Output
         </button>
+        {/* #71: marks the block at the cursor as a link target. Deliberately
+            NOT preceded by saveSelection() (unlike „Bild einfügen"): the button
+            takes focus before its handler runs, and saveSelection() would then
+            null out the very range the controller needs. The controller reads
+            the selectionchange-maintained range instead. */}
+        <button
+          type="button"
+          title="Diesen Block als Sprungmarke markieren, umbenennen oder die Markierung entfernen. Formel- und Bildblöcke zuvor mit einem Klick auf ihren Ziehgriff ❚❚ auswählen."
+          onClick={() => ctrl()?.markAnchor()}
+        >
+          ⚓ Sprungmarke
+        </button>
+        {/* #72: Link auf einen veröffentlichten Kurs, eine Einheit, ein
+            Dokument oder eine Sprungmarke darin. Wie bei ⚓ bewusst OHNE
+            saveSelection(): die Schaltfläche nimmt vor ihrem Handler den Fokus,
+            und saveSelection() würde genau den markierten Bereich verwerfen,
+            aus dem die Beschriftung entsteht. */}
+        <button
+          type="button"
+          title="Link auf einen veröffentlichten Kurs, eine Einheit, ein Dokument oder eine Sprungmarke einfügen. Markierter Text wird zur Beschriftung. Einen bestehenden Link bearbeitest du mit einem Klick darauf."
+          onClick={() => ctrl()?.insertLink()}
+        >
+          🔗 Link
+        </button>
         <button type="button" onClick={() => ctrl()?.resetEditor()}>
           Editor zurücksetzen
         </button>

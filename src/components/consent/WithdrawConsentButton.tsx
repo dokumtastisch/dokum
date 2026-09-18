@@ -5,9 +5,6 @@ import { useRouter } from 'next/navigation'
 import { useEffect } from 'react'
 import { withdrawConsent } from '@/actions/auth'
 
-// NOTE: Replace this email with the actual contact address when ready
-const CONTACT_EMAIL = 'kontakt@example.com'
-
 export function WithdrawConsentButton() {
   const router = useRouter()
   const [state, action, pending] = useActionState(
@@ -20,11 +17,7 @@ export function WithdrawConsentButton() {
 
   useEffect(() => {
     if (state.done) {
-      router.push(
-        `/auth/login?message=${encodeURIComponent(
-          `Einwilligung widerrufen. Datenlöschung beantragen: ${CONTACT_EMAIL}`
-        )}`
-      )
+      router.push('/auth/login?notice=consent-withdrawn')
     }
   }, [state.done, router])
 

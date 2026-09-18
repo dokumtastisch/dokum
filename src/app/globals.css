@@ -39,9 +39,64 @@ body {
   font-family: Arial, Helvetica, sans-serif;
 }
 
+/*
+ * The public course catalogue carries its own header — logo and actions live
+ * inside its shell — so the global navbar steps aside for it.
+ *
+ * Matched on the rendered shell, NOT on a class an effect puts on <body>: that
+ * version only took hold after hydration, so every load painted the navbar and
+ * the page gutter first and then snapped 66px up and 32px left. The gutter is
+ * cancelled the way DESIGN.md prescribes for a full-bleed page (`-mx-4
+ * sm:-mx-8` on the shell), not by overriding <main>'s padding from here — two
+ * mechanisms for one job is what made the two fight.
+ */
+body:has(.course-catalog-shell) > nav {
+  display: none;
+}
+
 /* Prevent iOS Safari auto-zoom on input focus (triggers when font-size < 16px) */
 input:not([type="checkbox"]):not([type="radio"]),
 select,
 textarea {
   font-size: 1rem !important;
+}
+
+/*
+ * MathJax assistive MathML (#84).
+ *
+ * MathJax v3 wraps every <mjx-container> with an <mjx-assistive-mml> copy for
+ * screen readers, and hides it visually through its OWN output stylesheet —
+ * injected as <style id="MJX-SVG-styles"> by the startup pipeline's
+ * `updateDocument()`. We never run that pipeline: mathjax-loader.ts sets
+ * `startup: { typeset: false }` and every call site renders through
+ * `tex2svgPromise` directly, so the stylesheet is never inserted and the
+ * assistive copy falls back to UA defaults — a visible, layout-taking second
+ * rendering of every formula.
+ *
+ * These declarations are MathJax's own (a11y/assistive-mml.ts `styles`),
+ * reproduced verbatim: visually hidden, still exposed to assistive tech. They
+ * live here rather than in editor.css + interactive-document.css because BOTH
+ * surfaces need them and a duplicated copy would be a silent drift hazard;
+ * `mjx-*` are MathJax-owned custom elements, so an unscoped rule cannot reach
+ * anything else in the app. Remove this only if the MathJax startup pipeline
+ * is ever run for real.
+ */
+mjx-assistive-mml {
+  position: absolute !important;
+  top: 0;
+  left: 0;
+  clip: rect(1px, 1px, 1px, 1px);
+  padding: 1px 0 0 0 !important;
+  border: 0 !important;
+  display: block !important;
+  width: auto !important;
+  overflow: hidden !important;
+  /* The hidden copy must not join a text selection — otherwise copying a
+     document yields every formula twice. */
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+mjx-assistive-mml[display="block"] {
+  width: 100% !important;
 }
