@@ -1,11 +1,14 @@
 import { LoginForm } from '@/components/auth/LoginForm'
+import { authNotice } from '@/lib/auth-notices'
 
 interface Props {
-  searchParams: Promise<{ message?: string }>
+  // A KEY, not a message: see auth-notices.ts for why the page refuses to
+  // print whatever a link puts in the URL.
+  searchParams: Promise<{ notice?: string }>
 }
 
 export default async function LoginPage({ searchParams }: Props) {
-  const { message } = await searchParams
+  const { notice } = await searchParams
 
   return (
     <main className="-mx-4 flex flex-col items-center justify-center bg-[#fffdf8] px-4 py-10 sm:-mx-8" style={{ minHeight: 'calc(100svh - 66px)' }}>
@@ -21,7 +24,7 @@ export default async function LoginPage({ searchParams }: Props) {
             Dev Database
           </div>
         )}
-        <LoginForm message={message} />
+        <LoginForm notice={authNotice(notice)} />
       </section>
 
       <p className="mt-auto max-w-[430px] pt-10 text-center text-sm leading-snug text-gray-500">

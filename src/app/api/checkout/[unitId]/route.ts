@@ -1,10 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
-import { getStripe, STRIPE_UNIT_PRICE_ID, siteUrl } from '@/lib/stripe'
+import { createCheckoutSession } from '@/lib/checkout'
+import { getEntitlementScope } from '@/lib/dal'
 
 // POST /api/checkout/[unitId]
-// Creates a Stripe Checkout Session for the flat-price one-time Unit purchase
-// and 303-redirects the browser to Stripe's hosted checkout page.
+// Creates a Stripe Checkout Session for a single Einheit and 303-redirects the
+// browser to Stripe's hosted checkout page.
+//
+// The sibling route /api/checkout/kurs/[kursId] sells a whole Kurs. Which of
+// the two a Kurs uses is `kurse.sold_as`, and this handler REFUSES to sell an
+// Einheit out of a Kurs sold as a whole: the button that posts here is server
+// rendered from the same column, so a request that disagrees with it is a
+// stale page or a hand-rolled POST — and honouring it would sell one Einheit
+// of something that is only for sale entire.
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ unitId: string }> },
@@ -15,7 +23,7 @@ export async function POST(
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) {
     const back = new URL('/auth/login', request.url)
-    back.searchParams.set('message', 'Bitte melde dich an, um eine Einheit zu kaufen.')
+    back.searchParams.set('notice', 'sign-in-to-buy-unit')
     return NextResponse.redirect(back, { status: 303 })
   }
 
@@ -23,7 +31,7 @@ export async function POST(
   // published; non-existent or unpublished units return null → 404).
   const { data: unit } = await supabase
     .from('units')
-    .select('id, kurs_id, title')
+    .select('id, kurs_id, title, kurse!inner(sold_as)')
     .eq('id', unitId)
     .single()
 
@@ -31,15 +39,24 @@ export async function POST(
     return new NextResponse('Unit nicht gefunden.', { status: 404 })
   }
 
-  // If already entitled, skip checkout and bounce straight to the unit.
-  const { data: existing } = await supabase
-    .from('entitlements')
-    .select('id')
-    .eq('user_id', user.id)
-    .eq('unit_id', unitId)
-    .maybeSingle()
+  const kurs = unit.kurse as unknown as { sold_as: string }
+  if (kurs.sold_as === 'kurs') {
+    // Not an error the buyer caused — send them to the Kurs page, which is
+    // where the whole-Kurs offer lives.
+    return NextResponse.redirect(
+      new URL(`/kurse/${unit.kurs_id}`, request.url),
+      { status: 303 },
+    )
+  }
 
-  if (existing) {
+  // If already entitled, skip checkout and bounce straight to the unit. Both
+  // grants count: an admin may have handed out a Kurs grant for a Kurs that
+  // otherwise sells its Einheiten one by one, and charging for something the
+  // buyer can already open would be the worst kind of bug to find out about
+  // from a customer.
+  const { unitIds, kursIds } = await getEntitlementScope(user.id)
+
+  if (unitIds.has(unitId) || kursIds.has(unit.kurs_id as string)) {
     return NextResponse.redirect(
       new URL(`/kurse/${unit.kurs_id}/units/${unitId}`, request.url),
       { status: 303 },
@@ -48,19 +65,10 @@ export async function POST(
 
   let session
   try {
-    session = await getStripe().checkout.sessions.create({
-      mode: 'payment',
-      line_items: [{ price: STRIPE_UNIT_PRICE_ID(), quantity: 1 }],
-      client_reference_id: user.id,
-      customer_email: user.email ?? undefined,
-      // Webhook + success-return handler both rely on these.
-      metadata: { user_id: user.id, unit_id: unitId },
-      success_url: `${siteUrl()}/api/checkout/success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${siteUrl()}/kurse/${unit.kurs_id}/units/${unitId}?canceled=1`,
-      // Customers should always pay in their own session; allow promo codes
-      // for future flexibility without round-tripping through Stripe.
-      allow_promotion_codes: true,
-    })
+    session = await createCheckoutSession(
+      { kind: 'unit', unitId, kursId: unit.kurs_id as string, title: unit.title as string },
+      user,
+    )
   } catch (err) {
     console.error('[checkout] stripe.checkout.sessions.create failed', err)
     return new NextResponse('Bezahlung konnte nicht gestartet werden.', { status: 500 })

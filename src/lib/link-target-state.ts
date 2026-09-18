@@ -30,6 +30,7 @@
  */
 
 import { z } from 'zod'
+import type { KursSoldAs } from '@/types'
 
 /**
  * What a target IS, as a privileged read finds it — identity-free on purpose:
@@ -49,11 +50,23 @@ export interface LinkTargetOwnership {
   gatedBy: UnitTeaser | null
 }
 
-/** The Einheit a locked link offers to unlock, named the way it sells itself. */
+/**
+ * The Einheit a locked link offers to unlock, named the way it sells itself.
+ *
+ * It carries its Kurs as well, because WHAT IS FOR SALE is a property of the
+ * Kurs: `soldAs = 'kurs'` means this Einheit cannot be bought on its own, and
+ * a card that did not know it would offer a purchase that the checkout route
+ * refuses. `kursPriceCents` is dormant in the other case — see
+ * `purchasePriceLabel`.
+ */
 export interface UnitTeaser {
   id: string
   title: string
   description: string | null
+  kursId: string
+  kursTitle: string
+  soldAs: KursSoldAs
+  kursPriceCents: number
 }
 
 /** Who is asking. Both flags come from the request, never from stored content. */
@@ -68,6 +81,10 @@ const UnitTeaserSchema = z.strictObject({
   id: z.string(),
   title: z.string(),
   description: z.string().nullable(),
+  kursId: z.string(),
+  kursTitle: z.string(),
+  soldAs: z.enum(['kurs', 'unit']),
+  kursPriceCents: z.number().int(),
 })
 
 /**

@@ -3,6 +3,7 @@
 import { useActionState, useState } from 'react'
 import { signIn } from '@/actions/auth'
 import Link from 'next/link'
+import type { AuthNotice } from '@/lib/auth-notices'
 
 type AuthState = { ok: false; error: string } | null
 type LoginFieldErrors = {
@@ -12,7 +13,7 @@ type LoginFieldErrors = {
 
 const initialState: AuthState = null
 
-export function LoginForm({ message }: { message?: string }) {
+export function LoginForm({ notice }: { notice?: AuthNotice | null }) {
   const [fieldErrors, setFieldErrors] = useState<LoginFieldErrors>({})
   const [state, action, pending] = useActionState(
     async (_prev: AuthState, formData: FormData): Promise<AuthState> => {
@@ -24,9 +25,17 @@ export function LoginForm({ message }: { message?: string }) {
 
   return (
     <div className="flex flex-col gap-5">
-      {message && (
-        <p className="text-sm text-green-600 bg-green-50 border border-green-200 rounded-md px-3 py-2">
-          {message}
+      {/* Same two boxes as before — a notice that reports a FAILURE just uses
+          the red one instead of being announced in green. */}
+      {notice && (
+        <p
+          className={
+            notice.tone === 'error'
+              ? 'rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700'
+              : 'text-sm text-green-600 bg-green-50 border border-green-200 rounded-md px-3 py-2'
+          }
+        >
+          {notice.text}
         </p>
       )}
 

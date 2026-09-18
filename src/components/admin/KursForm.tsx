@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { createKurs, updateKurs } from '@/actions/admin'
 import type { ActionResult, KursSoldAs, KursType } from '@/types'
-import { UNIT_PRICE_DISPLAY } from '@/lib/constants'
+import { MIN_PRICE_CENTS, UNIT_PRICE_DISPLAY } from '@/lib/constants'
 
 type FormState = ActionResult<{ id?: string }> | null
 
@@ -17,6 +17,7 @@ type DefaultValues = {
   position: number
   kurs_type?: KursType
   sold_as?: KursSoldAs
+  price_cents?: number
 }
 
 export function KursForm({
@@ -155,28 +156,30 @@ export function KursForm({
             <option value="unit">Einzelne Einheiten</option>
             <option value="kurs">Der ganze Kurs</option>
           </select>
-          <p className="text-xs text-amber-700">
-            &bdquo;Der ganze Kurs&ldquo; ist noch nicht scharf: der Kauf schaltet weiterhin nur einzelne
-            Einheiten frei, bis die Berechtigung auf Kursebene gebaut ist.
+          <p className="text-xs text-gray-400">
+            &bdquo;Der ganze Kurs&ldquo;: ein Kauf schaltet alle Einheiten frei &ndash; auch die, die du
+            sp&auml;ter hinzuf&uuml;gst.
           </p>
         </div>
 
-        {/* Preise sind bewusst tot geschaltet — sichtbar, damit die Absicht im
-            UI steht, deaktiviert, damit niemand sie für funktionsfähig hält.
-            Heute hängt jeder Checkout an EINER festen Stripe-Price-ID. */}
-        <div className="mt-4 flex gap-4 opacity-50">
+        {/* Der Kurspreis ist editierbar, der Einheitenpreis nicht: der h&auml;ngt an
+            einer festen Stripe-Price-ID (STRIPE_UNIT_PRICE_ID) und l&auml;sst sich
+            nur dort &auml;ndern. */}
+        <div className="mt-4 flex gap-4">
           <div className="flex flex-col gap-1">
             <label htmlFor="kurs-price" className="text-sm font-medium text-gray-700">
               Kurspreis
             </label>
             <input
               id="kurs-price"
-              type="text"
-              disabled
-              value=""
-              placeholder="—"
-              className="w-28 cursor-not-allowed rounded-md border border-gray-300 bg-gray-50 px-3 py-2 text-sm"
+              name="price_euro"
+              type="number"
+              step="0.01"
+              min={MIN_PRICE_CENTS / 100}
+              defaultValue={(defaultValues?.price_cents ?? 1500) / 100}
+              className="w-28 rounded-md border border-gray-300 px-3 py-2 text-sm focus:ring-2 focus:ring-brand focus:outline-none"
             />
+            <p className="text-xs text-gray-400">In Euro.</p>
           </div>
           <div className="flex flex-col gap-1">
             <label htmlFor="unit-price" className="text-sm font-medium text-gray-700">
@@ -189,10 +192,12 @@ export function KursForm({
               value={UNIT_PRICE_DISPLAY}
               className="w-28 cursor-not-allowed rounded-md border border-gray-300 bg-gray-50 px-3 py-2 text-sm"
             />
+            <p className="text-xs text-gray-400">Fest in Stripe.</p>
           </div>
         </div>
-        <p className="mt-1 text-xs text-gray-400">
-          Preise sind noch nicht einstellbar — jeder Kauf läuft über einen festen Stripe-Preis.
+        <p className="mt-2 text-xs text-gray-400">
+          Wirksam ist immer nur einer der beiden: der Kurspreis bei &bdquo;Der ganze Kurs&ldquo;,
+          der Einheitenpreis bei &bdquo;Einzelne Einheiten&ldquo;.
         </p>
       </fieldset>
 

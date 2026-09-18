@@ -12,6 +12,21 @@ export const UNIT_PRICE_CENTS = 300
 export const UNIT_PRICE_CURRENCY = 'EUR' as const
 export const UNIT_PRICE_DISPLAY = '€3'
 
+/** Stripe refuses a Checkout Session below its minimum charge for EUR. */
+export const MIN_PRICE_CENTS = 50
+
+/**
+ * A price for a badge or a button — „€15", „€12.50".
+ *
+ * Deliberately not `Intl.NumberFormat`: this runs on the server and in the
+ * browser, and a locale-aware formatter would put „15,00 €" in the German
+ * admin and „€15.00" in the English student UI for one and the same number.
+ * The price shown to a buyer must not depend on where it was rendered.
+ */
+export function formatPriceEur(cents: number): string {
+  return cents % 100 === 0 ? `€${cents / 100}` : `€${(cents / 100).toFixed(2)}`
+}
+
 export const ALLOWED_IMAGE_MIMES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'] as const
 
 export const ALLOWED_FILE_MIMES = ['application/pdf', ...ALLOWED_IMAGE_MIMES] as const

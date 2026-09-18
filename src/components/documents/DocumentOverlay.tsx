@@ -108,10 +108,10 @@ export function DocumentOverlay({
           <button
             type="button"
             onClick={dismiss}
-            aria-label="Dokument schließen"
+            aria-label="Close document"
             className="rounded-md px-3 py-1.5 text-sm font-medium text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900"
           >
-            Schließen ✕
+            Close ✕
           </button>
         </div>
         <div className="flex-1 overflow-y-auto px-6 py-8 sm:px-10 sm:py-10">{children}</div>

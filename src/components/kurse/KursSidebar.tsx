@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
+import { ArrowLeft, Lock } from 'lucide-react'
 import { usePathname } from 'next/navigation'
 import type { KursNavDocument, KursNavTask, KursNavUnit, KursType } from '@/types'
 import { useRevealDocument } from '@/components/kurse/document-reveal'
@@ -22,6 +23,13 @@ interface Props {
   /** Only a Lernkurs numbers its Einheiten — see `unitNumberPath`. */
   kursType: KursType
   units: KursSidebarUnit[]
+  /**
+   * What a locked Einheit costs to open — the flat Einheitenpreis, or the whole
+   * Kurs's price where the Kurs is sold entire (`purchasePriceLabel`).
+   *
+   * Optional because the editor's preview has no locked rows to put it on.
+   */
+  lockedPriceLabel?: string
   /** Forces the active branch for the editor's student-view preview. */
   activeUnitId?: string
   /** Highlights the page being edited without exposing its hidden carrier Task. */
@@ -60,6 +68,7 @@ export function KursSidebar({
   kursTitle,
   kursType,
   units,
+  lockedPriceLabel = UNIT_PRICE_DISPLAY,
   activeUnitId,
   activeLessonId,
 }: Props) {
@@ -121,29 +130,40 @@ export function KursSidebar({
     // All of it is `lg:`-only. Below that the tree is a collapsible block above
     // the content and must scroll away with the page like any other block.
     <aside className="shrink-0 border-b border-gray-200 bg-[#faf8f3] lg:sticky lg:top-[66px] lg:h-[calc(100svh-66px)] lg:w-72 lg:self-start lg:overflow-y-auto lg:border-r lg:border-b-0">
-      <div className="flex items-start justify-between gap-3 px-5 py-5 lg:px-6 lg:py-7">
-        {/* The Kurs name IS the way back to the Kurs list. Nothing else in the
-            shell offers one — the navbar has no „Kurse" entry — and the title
-            was the only thing left in this header to carry it. */}
+      <div className="px-5 py-5 lg:px-6 lg:py-7">
+        {/* The named way back to the catalogue. The navbar is no help here — it
+            has no „Kurse" entry — so until now the Kurs title carried the link
+            on its own, which nothing announced. The title stays a link so the
+            old gesture keeps working; this is the one that can be seen. */}
         <Link
           href="/kurse"
           onClick={activeUnitId ? (event) => event.preventDefault() : undefined}
-          className="min-w-0 text-lg leading-tight font-black text-black transition-colors hover:text-brand"
+          className="mb-2 inline-flex items-center gap-1.5 text-xs font-semibold text-gray-500 transition-colors hover:text-brand"
         >
-          {kursTitle}
+          <ArrowLeft className="h-3.5 w-3.5 shrink-0" strokeWidth={2.4} />
+          Back to courses
         </Link>
-        <button
-          type="button"
-          onClick={() => setMobileOpen((v) => !v)}
-          aria-expanded={mobileOpen}
-          className="shrink-0 rounded-md border border-gray-300 px-2.5 py-1 text-xs font-semibold text-gray-600 transition-colors hover:bg-white lg:hidden"
-        >
-          {mobileOpen ? 'Inhalt ausblenden' : 'Inhalt'}
-        </button>
+        <div className="flex items-start justify-between gap-3">
+          <Link
+            href="/kurse"
+            onClick={activeUnitId ? (event) => event.preventDefault() : undefined}
+            className="min-w-0 text-lg leading-tight font-black text-black transition-colors hover:text-brand"
+          >
+            {kursTitle}
+          </Link>
+          <button
+            type="button"
+            onClick={() => setMobileOpen((v) => !v)}
+            aria-expanded={mobileOpen}
+            className="shrink-0 rounded-md border border-gray-300 px-2.5 py-1 text-xs font-semibold text-gray-600 transition-colors hover:bg-white lg:hidden"
+          >
+            {mobileOpen ? 'Hide contents' : 'Contents'}
+          </button>
+        </div>
       </div>
 
       <nav
-        aria-label="Kursinhalt"
+        aria-label="Course content"
         className={`px-3 pb-6 lg:block lg:px-4 ${mobileOpen ? 'block' : 'hidden'}`}
       >
         <ul className="space-y-0.5">
@@ -163,7 +183,7 @@ export function KursSidebar({
                   level={0}
                   active={unit.id === routeUnitId && !activeDocId}
                   dot={unit.locked ? 'locked' : onBranch ? 'active' : 'unit'}
-                  badge={unit.locked ? UNIT_PRICE_DISPLAY : undefined}
+                  badge={unit.locked ? lockedPriceLabel : undefined}
                   preventNavigation={Boolean(activeUnitId)}
                 />
                 {onBranch && (lessons.length > 0 || tasks.length > 0) && (
@@ -197,7 +217,7 @@ export function KursSidebar({
           })}
         </ul>
         {units.length === 0 && (
-          <p className="px-3 py-2 text-xs text-gray-400">Noch keine Einheiten.</p>
+          <p className="px-3 py-2 text-xs text-gray-400">No units yet.</p>
         )}
       </nav>
     </aside>
@@ -416,13 +436,21 @@ function Row({
   badge?: string
   preventNavigation?: boolean
 }) {
+  // A locked Einheit reads as locked at a glance — a padlock where the dot
+  // sits, and muted text. It stays a LINK: its page is the offer, and getting
+  // there is the point of the row.
+  const locked = dot === 'locked'
   return (
     <Link
       href={href}
       onClick={preventNavigation ? (event) => event.preventDefault() : undefined}
-      className={rowClasses(active, level)}
+      className={rowClasses(active, level, locked)}
     >
-      <Dot kind={dot} />
+      {locked ? (
+        <Lock aria-hidden className="h-3 w-3 shrink-0" strokeWidth={2.2} />
+      ) : (
+        <Dot kind={dot} />
+      )}
       {/* `opacity`, not a colour: the row is brand-coloured when active and
           grey when not, and the number has to follow it either way. */}
       {number && <span className="shrink-0 opacity-60 tabular-nums">{number}</span>}
@@ -436,10 +464,18 @@ function Row({
   )
 }
 
-function rowClasses(active: boolean, level: 0 | 1 | 2): string {
+// `locked` is folded into the tone rather than appended by the caller: two
+// `text-…` utilities on one element do not resolve by the order they are
+// written in — whichever Tailwind emits last wins, which is not a decision
+// anyone here gets to make. One tone, picked once.
+function rowClasses(active: boolean, level: 0 | 1 | 2, locked = false): string {
   const weight = level === 0 ? 'font-bold' : 'font-medium'
   const size = level === 2 ? 'text-[13px]' : 'text-sm'
-  const tone = active ? 'bg-brand/10 text-brand' : 'text-gray-700 hover:bg-black/[0.04] hover:text-black'
+  const tone = active
+    ? 'bg-brand/10 text-brand'
+    : locked
+      ? 'text-gray-400 hover:bg-black/[0.04] hover:text-gray-500'
+      : 'text-gray-700 hover:bg-black/[0.04] hover:text-black'
   return `flex min-w-0 items-center gap-2 rounded-md py-1.5 pr-2 pl-2 ${size} ${weight} ${tone} transition-colors`
 }
 

@@ -70,7 +70,7 @@ export async function GET(
   // Skipped where nothing is gated — a Kurs and an Einheit cost no purchase to
   // reach, so the query would be asked and thrown away.
   const entitled = target?.gatedBy
-    ? await userHasUnitAccess(user.id, target.gatedBy.id, role)
+    ? await userHasUnitAccess(user.id, target.gatedBy.id, role, target.gatedBy.kursId)
     : false
 
   const descriptor = describeLinkTarget(target, { isAdmin: role === 'admin', entitled })

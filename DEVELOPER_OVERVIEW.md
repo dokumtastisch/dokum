@@ -26,18 +26,20 @@ Kurs (Course)
 
 **Key Rules:**
 - Only `kurse` has a `published` boolean — everything below it inherits visibility from that one flag
-- **Tasks / Documents / DocumentImages / `pdfs` storage objects gate on *entitled AND published*** (or admin role). `add_entitlements.sql` had *dropped* the `published` subquery from those four policies, leaving the rows readable to an entitled user under an archived Kurs; `add_rls_published_conjunct.sql` (#80) put it back as a conjunct inside the same policy — never as a second policy, since permissive SELECT policies are OR'd and a separate one would *grant* access. The app-level re-checks in `/api/file`, `/api/image` and `/dokumente/[docId]` stay as defence in depth, but the archive no longer depends on them.
+- **Tasks / Documents / DocumentImages / `pdfs` storage objects gate on *entitled AND published*** (or admin role), where *entitled* means an `entitlements` row for the owning Einheit **or** for its Kurs (`add_kurs_entitlements.sql`). `add_entitlements.sql` had *dropped* the `published` subquery from those four policies, leaving the rows readable to an entitled user under an archived Kurs; `add_rls_published_conjunct.sql` (#80) put it back as a conjunct inside the same policy — never as a second policy, since permissive SELECT policies are OR'd and a separate one would *grant* access. The app-level re-checks in `/api/file`, `/api/image` and `/dokumente/[docId]` stay as defence in depth, but the archive no longer depends on them. Any change to these four policies must be re-proved with **both** scripts in `supabase/checks/`.
 - All levels support `position` ordering (non-unique integers; ties broken by `created_at ASC`)
 - Sorting is applied inside the DAL (`src/lib/dal.ts`) — no manual sorting in page components
 - `ON DELETE CASCADE` at every foreign key level
 
-### Payments (per-Unit, one-time, flat €3)
+### Payments (one-time, no subscription — per Unit or per Kurs)
 
-- **Model:** each `Unit` is bought once for a flat €3 (test mode price `price_1TWLu0CbBje0sCsEadcen6py`). Lifetime entitlement, no subscription.
-- **`entitlements` table:** `(user_id, unit_id, granted_at, source: 'purchase'|'admin', stripe_session_id)`. UNIQUE on `(user_id, unit_id)`; partial UNIQUE on `stripe_session_id` for webhook idempotency.
-- **RLS:** SELECT on tasks/documents/document_images and storage.objects (bucket `pdfs`) requires `EXISTS` in `entitlements` for the ancestor `unit_id` **and** the ancestor `kurse.published` — OR admin role.
-- **Flow:** user clicks "Freischalten – €3" → form posts to `/api/checkout/[unitId]` → server creates Checkout Session and redirects → user pays on Stripe → Stripe redirects to `/api/checkout/success?session_id=…` which eager-inserts the entitlement using the service-role client (idempotent on `stripe_session_id`) → `/api/stripe/webhook` covers the case where the user closes the tab.
-- **Admin grants:** insert directly into `entitlements` with `source = 'admin'` (via Supabase dashboard or a future admin action) — audit-log with `action='grant', entity_type='entitlement'`.
+- **Model — `kurse.sold_as` decides, per Kurs:** `'unit'` sells each `Unit` once for the flat €3 (test mode price `price_1TWLu0CbBje0sCsEadcen6py`); `'kurs'` sells the whole Kurs once for `kurse.price_cents`. Lifetime entitlement either way. In practice Musterlösungen are `'unit'` and Lernkurse `'kurs'`, but nothing in the code reads `kurs_type` for this — the column is the switch, so an exception costs one admin edit.
+- **A Kurs grant covers Einheiten added after the sale.** That is the reason it is one row carrying `kurs_id` rather than a fan-out of unit rows at checkout time (`supabase/add_kurs_entitlements.sql`).
+- **`entitlements` table:** `(user_id, unit_id | kurs_id, granted_at, source: 'purchase'|'admin', stripe_session_id)`, exactly one of the two targets set (`entitlements_target_check`). UNIQUE on `(user_id, unit_id)`; partial UNIQUE on `(user_id, kurs_id)` — a plain constraint would be useless there, NULLs being distinct — plus the partial UNIQUE on `stripe_session_id` for webhook idempotency.
+- **RLS:** SELECT on tasks/documents/document_images and storage.objects (bucket `pdfs`) requires `EXISTS` in `entitlements` matching the ancestor `unit_id` **or** the ancestor `kurs_id`, **and** the ancestor `kurse.published` — OR admin role.
+- **Prices:** the Einheitenpreis is a fixed Stripe Price (`STRIPE_UNIT_PRICE_ID`, mirrored by `UNIT_PRICE_CENTS`); the Kurspreis is an inline `price_data` amount from `kurse.price_cents`, editable in the Kurs form (in euros, stored in cents). `lib/pricing.ts` is the single rule for which of the two a surface shows.
+- **Flow:** user clicks "Unlock – €X" → form posts to `/api/checkout/[unitId]` or `/api/checkout/kurs/[kursId]` (each refuses the sale its `sold_as` does not describe, and redirects to the surface that does) → `lib/checkout.ts` creates the Checkout Session, stamping `metadata.unit_id` XOR `metadata.kurs_id` → user pays on Stripe → `/api/checkout/success?session_id=…` eager-inserts the entitlement with the service-role client (idempotent on `stripe_session_id`) → `/api/stripe/webhook` covers the case where the user closes the tab. Both handlers read the target back through `entitlementFromMetadata`, which refuses a session naming neither or both.
+- **Admin grants:** insert directly into `entitlements` with `source = 'admin'` (via Supabase dashboard or a future admin action) — audit-log with `action='grant', entity_type='entitlement'`. There is still no admin UI for this.
 - **Env requirements:** `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_UNIT_PRICE_ID`, `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY`, `NEXT_PUBLIC_SITE_URL`, `SUPABASE_SERVICE_ROLE_KEY`.
 - **CSP:** `connect-src` allows `api.stripe.com`; `frame-src` allows `js.stripe.com`, `hooks.stripe.com`, `checkout.stripe.com`; `form-action` allows `checkout.stripe.com`.
 - **Proxy:** `/api/stripe/webhook` bypasses the proxy entirely (Stripe has no cookies).
@@ -67,7 +69,7 @@ Kurs (Course)
 | `documents` | PDFs/images/published interactive documents | `id`, `task_id` (FK), `title`, `description`, `file_path`, `file_type` (`pdf`\|`image`\|`image_collection`\|`interactive`, CHECK-constrained), `position`, `created_at`, `content` (JSONB, published document JSON — NULL for legacy rows) |
 | `document_images` | Image collection items | `id`, `document_id` (FK CASCADE), `file_path`, `position`, `created_at` |
 | `audit_logs` | Admin + purchase action log | `id`, `actor_id` (FK auth.users), `action` (`create`\|`update`\|`delete`\|`grant`\|`revoke`), `entity_type` (incl. `entitlement`, `editor_document`, `editor_image`), `entity_id`, `entity_title`, `metadata` (JSONB), `created_at` |
-| `entitlements` | Per-(user, unit) paid access | `id`, `user_id` (FK auth.users), `unit_id` (FK units), `granted_at`, `source` (`purchase`\|`admin`), `stripe_session_id` |
+| `entitlements` | Paid access, per (user, unit) **or** (user, kurs) | `id`, `user_id` (FK auth.users), `unit_id` (FK units, nullable), `kurs_id` (FK kurse, nullable — exactly one of the two, `entitlements_target_check`), `granted_at`, `source` (`purchase`\|`admin`), `stripe_session_id` |
 | `editor_documents` | LaTeX-editor drafts (PRD #28; outside the Kurs hierarchy until published) | `id`, `title`, `content` (JSONB, versioned document JSON), `published_document_id` (FK documents, SET NULL), `created_by` (FK auth.users, SET NULL), `created_at`, `updated_at` (trigger-maintained) |
 | `editor_images` | Uploaded images of editor drafts (slice 8; never base64 in `content` — blocks store the row id) | `id`, `editor_document_id` (FK CASCADE), `file_path` (in bucket `pdfs` under `editor-images/<draftId>/…`), `created_at` |
 
@@ -342,7 +344,7 @@ Everything under `/kurse/[kursId]` renders into a two-column shell owned by `app
 
 Three consequences worth knowing before touching it:
 
-- **A locked Einheit has no children in the tree, and RLS is what does that** — `tasks`/`documents` require an entitlement, `units` do not. So an unpaid Einheit is still listed by name (it is the thing being sold, and its page holds the paywall) while its contents are neither readable nor listable. The layout's `locked` flag is display only: a €3 badge and a hollow dot, never enforcement.
+- **A locked Einheit has no children in the tree, and RLS is what does that** — `tasks`/`documents` require an entitlement, `units` do not. So an unpaid Einheit is still listed by name (it is the thing being sold, and its page holds the paywall) while its contents are neither readable nor listable. The layout's `locked` flag is display only: a padlock, muted text and a price badge (the Einheitenpreis, or the Kurspreis where the Kurs is sold whole), never enforcement.
 - **`getKursNavTree()` selects titles and nothing else.** No `content` — the sidebar renders no document, and `*` would ship every published snapshot in the Kurs on every page load in it.
 - **Pages below the shell carry no page chrome of their own** — no background, no width cap, no „back to course" link. Their `error.tsx`/`loading.tsx` are content-only for the same reason. Errors thrown by the *layout* bubble past them to the root boundary.
 
@@ -385,7 +387,7 @@ The constant lives in its own module because a `'use server'` file may export no
 
 **⚠ Saving writes live content.** There is no draft layer yet — a published Kurs shows a save immediately. The course-wide draft mode is the next piece; the workspace says so on screen rather than leaving an author to find out.
 
-**⚠ `kurse.sold_as` is not an access gate.** It records what a checkout sells. Whole-course purchase needs a scoped `entitlements` row, which does not exist yet, so `'kurs'` currently describes an intention. Prices are equally unbuilt: the fields in the Kurs form are visibly disabled, because every checkout still runs through one fixed Stripe Price ID.
+**⚠ `kurse.sold_as` is still not an access gate** — but it is now live. It decides what a checkout *offers*: `'kurs'` sells the whole Kurs at `kurse.price_cents` (editable in the Kurs form, in euros), `'unit'` sells each Einheit at the fixed Stripe Price. What a reader may *open* remains `entitlements` + RLS, which accept a Unit grant or a Kurs grant. The Einheitenpreis stays read-only in the form: it lives in Stripe.
 
 ### File Serving
 
@@ -598,12 +600,14 @@ Migrations live in `supabase/`. Apply them in order — first to dev (Supabase S
 | `add_document_content.sql` | `documents.content` JSONB (published document snapshot, NULL for legacy rows) + `documents_file_type_check` CHECK adding `interactive`; no RLS changes needed — the row is already entitlement-gated |
 | `add_rls_published_conjunct.sql` | Re-adds the `published` conjunct to the four child SELECT policies (tasks, documents, document_images, `pdfs` storage objects) so an archived Kurs goes dark in the database, not only in app code (#80). No-op for published Kurse; admins unaffected |
 | `add_lessons.sql` | `kurse.kurs_type` (`musterloesung`/`lernkurs`) + `kurse.sold_as` (`kurs`/`unit`), and `documents.file_type` gains `'lesson'` (#107). Adds NO RLS: a Lernseite is a Document and inherits the entitlement gate that already exists — which is exactly why it is not a column on `units` |
+| `add_kurs_entitlements.sql` | `kurse.price_cents`; `entitlements.kurs_id` (+ `unit_id` nullable, XOR CHECK, partial UNIQUE); the four content SELECT policies widened from „entitled for this Einheit" to „…or for its Kurs", `published` conjunct untouched. Makes `kurse.sold_as = 'kurs'` real |
 
 **Verification checks** live in `supabase/checks/` — SQL scripts that prove a guarantee against a real database, for guarantees no Vitest seam can reach. Each one runs inside a transaction that ends in `ROLLBACK`. Run them against **dev**, after applying the migration they belong to:
 
 | File | Proves |
 |------|--------|
 | `rls_published_conjunct_check.sql` | An unpublished Kurs is unreadable to an entitled non-admin and to anonymous, fully readable to an admin, and unchanged for a published Kurs (#80). Fails before `add_rls_published_conjunct.sql`, passes after |
+| `rls_kurs_entitlement_check.sql` | A whole-Kurs grant opens exactly its own Kurs — including an Einheit created after the sale — stays dark while that Kurs is unpublished, and reaches no other Kurs. Also pins the XOR CHECK and the partial UNIQUE. Run it together with the one above after touching those policies |
 
 ## Common Tasks
 

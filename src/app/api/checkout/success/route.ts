@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { getStripe } from '@/lib/stripe'
+import { entitlementFromMetadata } from '@/lib/checkout'
 import { logAuditWith } from '@/lib/audit'
 
 // GET /api/checkout/success?session_id=cs_test_...
@@ -29,12 +30,14 @@ export async function GET(request: NextRequest) {
     return NextResponse.redirect(new URL('/kurse?pending=1', request.url), { status: 303 })
   }
 
-  const userId = session.metadata?.user_id ?? null
-  const unitId = session.metadata?.unit_id ?? null
-  if (!userId || !unitId) {
-    console.error('[checkout/success] missing metadata on session', { sessionId })
+  // Either a Unit or a Kurs was bought — the metadata says which, and saying
+  // neither or both is unrecoverable rather than a thing to guess about.
+  const grant = entitlementFromMetadata(session.metadata)
+  if (!grant) {
+    console.error('[checkout/success] missing or ambiguous metadata on session', { sessionId })
     return new NextResponse('Sitzungs-Metadaten unvollständig.', { status: 500 })
   }
+  const { userId, unitId, kursId } = grant
 
   const service = createServiceClient()
 
@@ -46,6 +49,7 @@ export async function GET(request: NextRequest) {
     .insert({
       user_id: userId,
       unit_id: unitId,
+      kurs_id: kursId,
       source: 'purchase',
       stripe_session_id: sessionId,
     })
@@ -61,16 +65,30 @@ export async function GET(request: NextRequest) {
       actorId: userId,
       action: 'grant',
       entityType: 'entitlement',
-      entityId: unitId,
-      metadata: { source: 'purchase', stripe_session_id: sessionId, via: 'success_return' },
+      entityId: unitId ?? kursId!,
+      metadata: {
+        source: 'purchase',
+        scope: unitId ? 'unit' : 'kurs',
+        stripe_session_id: sessionId,
+        via: 'success_return',
+      },
     })
+  }
+
+  // Where the buyer lands: the Einheit they just unlocked, or — for a whole
+  // Kurs — its front page, from which every Einheit is now open.
+  if (kursId) {
+    return NextResponse.redirect(
+      new URL(`/kurse/${kursId}?purchased=1`, request.url),
+      { status: 303 },
+    )
   }
 
   // Look up parent kurs to redirect cleanly into the now-unlocked unit.
   const { data: unit } = await service
     .from('units')
     .select('kurs_id')
-    .eq('id', unitId)
+    .eq('id', unitId!)
     .single()
 
   const target = unit

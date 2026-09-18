@@ -246,19 +246,11 @@ export function DocumentForm({
         </div>
       )}
 
-      <div className="flex flex-col gap-1">
-        <label htmlFor="doc-position" className="text-sm font-medium text-gray-700">
-          Position
-        </label>
-        <input
-          id="doc-position"
-          name="position"
-          type="number"
-          defaultValue={defaultValues?.position ?? 0}
-          className="w-24 rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand"
-        />
-        <p className="text-xs text-gray-400">Lower numbers appear first within the Task.</p>
-      </div>
+      {/* The order is dragged in the tree, not typed here — but `position` is
+          still what the schema reads, and `positionField` DEFAULTS TO 0. A form
+          that simply left the field out would send every edited Dokument to the
+          top of its Aufgabe. So the current value rides along hidden. */}
+      <input type="hidden" name="position" value={defaultValues?.position ?? 0} />
 
       <button
         type="submit"

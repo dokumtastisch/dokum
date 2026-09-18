@@ -71,7 +71,7 @@ export function LinkLockedCard({
       // net under it, so a state that failed to render the line below degrades
       // to a vaguely-named dialog rather than an unnamed one (DocumentOverlay
       // carries the same pair for the same reason).
-      aria-label="Einheit gesperrt"
+      aria-label="Unit locked"
       aria-labelledby={titleId}
       onClose={onDismiss}
       // The press decides, not the click: a click's target is the common
@@ -90,22 +90,26 @@ export function LinkLockedCard({
           <button
             type="button"
             onClick={dismiss}
-            aria-label="Hinweis schließen"
+            aria-label="Dismiss notice"
             className="rounded-md px-2 py-1 text-sm font-medium text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900"
           >
-            Schließen ✕
+            Close ✕
           </button>
         </div>
         <p id={titleId} className="px-6 text-sm text-gray-600">
-          Das verlinkte Dokument{' '}
-          <span className="font-medium text-gray-900">{target.title}</span> gehört zu einer Einheit,
-          die du noch nicht freigeschaltet hast.
+          The linked document{' '}
+          <span className="font-medium text-gray-900">{target.title}</span> belongs to a unit you
+          have not unlocked yet.
         </p>
         {/* `mt-8` on the paywall's own box is the spacing below this line. */}
         <UnitPaywall
           unitId={target.unit.id}
           title={target.unit.title}
           description={target.unit.description}
+          kursId={target.unit.kursId}
+          kursTitle={target.unit.kursTitle}
+          soldAs={target.unit.soldAs}
+          kursPriceCents={target.unit.kursPriceCents}
         />
         <div className="h-4" />
       </div>

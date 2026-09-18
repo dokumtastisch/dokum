@@ -18,6 +18,12 @@ const EINHEIT = {
   id: '22222222-2222-4222-8222-222222222222',
   title: 'Einheit 3 — Bewertung',
   description: 'DCF, Multiples und die Fallstricke dazwischen.',
+  // The Kurs the Einheit is sold through — a locked card cannot make an offer
+  // without knowing whether the Einheit is even for sale on its own.
+  kursId: '11111111-1111-4111-8111-111111111111',
+  kursTitle: 'Unternehmensbewertung',
+  soldAs: 'unit' as const,
+  kursPriceCents: 1500,
 }
 
 /** A Dokument: owned by an Einheit, so an entitlement gates it. */

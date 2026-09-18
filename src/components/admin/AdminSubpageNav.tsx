@@ -3,7 +3,7 @@ import Link from 'next/link'
 type Tab = 'kurse' | 'units' | 'tasks' | 'documents' | 'editor' | 'lernseiten'
 
 const TABS: { id: Tab; label: string; href: string }[] = [
-  { id: 'kurse',      label: 'Kurs',      href: '/admin/kurse' },
+  { id: 'kurse',      label: 'Kurs',      href: '/admin' },
   { id: 'units',      label: 'Unit',      href: '/admin/units/new' },
   { id: 'tasks',      label: 'Task',      href: '/admin/tasks/new' },
   { id: 'documents',  label: 'Dokument',  href: '/admin/documents/new' },

@@ -14,23 +14,23 @@ export default function KursError({
   return (
     <div className="py-16 text-center">
       <h2 className="text-2xl font-black tracking-[0] text-black">
-        Dieser Kurs konnte nicht geladen werden.
+        This course could not be loaded.
       </h2>
       <p className="mt-3 text-base text-gray-600">
-        Bitte versuche es erneut oder geh zurück zur Übersicht.
+        Please try again or go back to the overview.
       </p>
       <div className="mt-8 flex justify-center gap-4">
         <button
           onClick={reset}
           className="rounded-lg bg-gray-900 px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-gray-700"
         >
-          Erneut versuchen
+          Try again
         </button>
         <Link
           href="/kurse"
           className="rounded-lg border border-gray-300 px-5 py-2.5 text-sm font-semibold text-gray-700 transition-colors hover:bg-gray-50"
         >
-          Zurück zu den Kursen
+          Back to courses
         </Link>
       </div>
     </div>

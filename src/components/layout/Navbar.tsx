@@ -23,7 +23,17 @@ export async function Navbar() {
       className="sticky top-0 z-50 bg-[#fffdf8]/95 backdrop-blur-sm"
       style={{ height: 66, paddingTop: 16 }}
     >
-      <div className="mx-auto flex max-w-[1420px] items-start justify-between px-5 sm:px-8 lg:px-12">
+      {/* FLUSH LEFT, AND THE GUTTER DOES NOT GROW WITH THE BREAKPOINT. The
+          logo has to land on the same pixel on every page, and the shells that
+          hide this navbar draw their own logo against their own left edge —
+          the catalogue's sidebar at 20px. A centred `max-w-[1420px]` box moved
+          this one with the window (≈48px at 1200, ≈138px at 1600, ≈338px at
+          2000), so it agreed with that sidebar at exactly one window width and
+          jumped at every other. `px-5` is those 20px.
+
+          The Footer keeps the centred cap on purpose: it closes the page
+          rather than heading it, and nothing sits under it to align with. */}
+      <div className="flex items-start justify-between px-5">
         <Link href="/" className="flex items-center gap-2 text-lg font-black uppercase tracking-tight text-gray-950">
           <span className="flex h-7 w-7 items-center justify-center rounded bg-brand text-xl font-black text-white shadow-[inset_0_1px_0_rgb(255_255_255_/_0.25)]">
             D

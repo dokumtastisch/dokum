@@ -70,13 +70,24 @@ export function KurseTable({ kurse }: { kurse: KursRow[] }) {
         <p className="text-sm font-medium text-gray-500">
           {kurse.length} {kurse.length === 1 ? 'Kurs' : 'Kurse'}
         </p>
-        <button
-          type="button"
-          onClick={() => setEditing('new')}
-          className="btn-brand rounded-lg bg-brand px-4 py-2.5 text-sm font-semibold text-white shadow-sm"
-        >
-          + Neuen Kurs hinzufügen
-        </button>
+        <div className="flex items-center gap-3">
+          {/* The only way into the standalone LaTeX editor now that the admin
+              subpage tab row is gone from this page. Neutral form (DESIGN.md),
+              sized to match the primary button beside it. */}
+          <Link
+            href="/admin/editor"
+            className="rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50"
+          >
+            Alter Editor
+          </Link>
+          <button
+            type="button"
+            onClick={() => setEditing('new')}
+            className="btn-brand rounded-lg bg-brand px-4 py-2.5 text-sm font-semibold text-white shadow-sm"
+          >
+            + Neuen Kurs hinzufügen
+          </button>
+        </div>
       </div>
 
       {error && (

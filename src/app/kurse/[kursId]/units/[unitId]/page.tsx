@@ -31,13 +31,21 @@ export default async function UnitPage({ params, searchParams }: Props) {
   if (!user) notFound()
 
   const role = user.app_metadata?.['role'] as string | undefined
-  const hasAccess = await userHasUnitAccess(user.id, unitId, role)
+  // The Kurs id is part of the question: an Einheit under a Kurs sold whole
+  // is opened by the Kurs grant, not by one of its own.
+  const hasAccess = await userHasUnitAccess(user.id, unitId, role, kursId)
 
   if (!hasAccess) {
     // The full tree is gated by RLS, so fall back to the bare-unit query that
     // only needs the published-Kurs visibility (still allowed for everyone).
     const meta = await getUnitById(unitId)
     if (!meta) notFound()
+
+    // Memoised and already fetched by the Kurs layout — this is what the offer
+    // is made of: `sold_as` decides whether the button sells this Einheit or
+    // the whole Kurs, and `price_cents` what the latter costs.
+    const kurs = await getKursNavTree(kursId)
+    if (!kurs) notFound()
 
     return (
       <>
@@ -50,6 +58,10 @@ export default async function UnitPage({ params, searchParams }: Props) {
           title={meta.title}
           description={meta.description}
           canceled={canceled === '1'}
+          kursId={kursId}
+          kursTitle={kurs.title}
+          soldAs={kurs.sold_as}
+          kursPriceCents={kurs.price_cents}
         />
       </>
     )
@@ -84,7 +96,7 @@ export default async function UnitPage({ params, searchParams }: Props) {
       />
       {purchased === '1' && (
         <p className="mt-4 rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
-          Zahlung erfolgreich – die Einheit ist freigeschaltet.
+          Payment successful – this unit is unlocked.
         </p>
       )}
 

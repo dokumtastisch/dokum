@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import type Stripe from 'stripe'
 import { createServiceClient } from '@/lib/supabase/service'
 import { getStripe, STRIPE_WEBHOOK_SECRET } from '@/lib/stripe'
+import { entitlementFromMetadata } from '@/lib/checkout'
 import { logAuditWith } from '@/lib/audit'
 
 // Stripe sends the raw body; signature verification fails if Next pre-parses it.
@@ -37,13 +38,13 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ received: true, ignored: 'unpaid_session' })
   }
 
-  const userId = session.metadata?.user_id ?? null
-  const unitId = session.metadata?.unit_id ?? null
-  if (!userId || !unitId) {
-    console.error('[stripe/webhook] missing metadata on session', { sessionId: session.id })
+  const grant = entitlementFromMetadata(session.metadata)
+  if (!grant) {
+    console.error('[stripe/webhook] missing or ambiguous metadata on session', { sessionId: session.id })
     // 200 so Stripe doesn't endlessly retry an unrecoverable event.
     return NextResponse.json({ received: true, error: 'missing_metadata' })
   }
+  const { userId, unitId, kursId } = grant
 
   const service = createServiceClient()
 
@@ -52,6 +53,7 @@ export async function POST(request: NextRequest) {
     .insert({
       user_id: userId,
       unit_id: unitId,
+      kurs_id: kursId,
       source: 'purchase',
       stripe_session_id: session.id,
     })
@@ -67,8 +69,13 @@ export async function POST(request: NextRequest) {
       actorId: userId,
       action: 'grant',
       entityType: 'entitlement',
-      entityId: unitId,
-      metadata: { source: 'purchase', stripe_session_id: session.id, via: 'webhook' },
+      entityId: unitId ?? kursId!,
+      metadata: {
+        source: 'purchase',
+        scope: unitId ? 'unit' : 'kurs',
+        stripe_session_id: session.id,
+        via: 'webhook',
+      },
     })
   }
 

@@ -9,13 +9,14 @@ import { getAdminUser, parseForm, revalidateAdminPages, collectStoragePaths, rem
 export async function createKurs(formData: FormData): Promise<ActionResult<{ id: string }>> {
   const { supabase, user } = await getAdminUser()
 
-  const parsed = parseForm(KursFormSchema, formData, ['title', 'description', 'position', 'published', 'kurs_type', 'sold_as'])
+  const parsed = parseForm(KursFormSchema, formData, ['title', 'description', 'position', 'published', 'kurs_type', 'sold_as', 'price_euro'])
   if (!parsed.ok) return { ok: false, error: parsed.error }
-  const { title, description, position, published, kurs_type, sold_as } = parsed.data
+  // `price_euro` left the schema as cents — see KursFormSchema.
+  const { title, description, position, published, kurs_type, sold_as, price_euro: price_cents } = parsed.data
 
   const { data, error } = await supabase
     .from('kurse')
-    .insert({ title, description, position, published, kurs_type, sold_as })
+    .insert({ title, description, position, published, kurs_type, sold_as, price_cents })
     .select('id')
     .single()
   if (error) return { ok: false, error: `Failed to create Kurs: ${error.message}` }
@@ -28,11 +29,11 @@ export async function createKurs(formData: FormData): Promise<ActionResult<{ id:
 export async function updateKurs(kursId: string, formData: FormData): Promise<ActionResult> {
   const { supabase, user } = await getAdminUser()
 
-  const parsed = parseForm(KursMetadataFormSchema, formData, ['title', 'description', 'position', 'kurs_type', 'sold_as'])
+  const parsed = parseForm(KursMetadataFormSchema, formData, ['title', 'description', 'position', 'kurs_type', 'sold_as', 'price_euro'])
   if (!parsed.ok) return { ok: false, error: parsed.error }
-  const { title, description, position, kurs_type, sold_as } = parsed.data
+  const { title, description, position, kurs_type, sold_as, price_euro: price_cents } = parsed.data
 
-  const { error } = await supabase.from('kurse').update({ title, description, position, kurs_type, sold_as }).eq('id', kursId)
+  const { error } = await supabase.from('kurse').update({ title, description, position, kurs_type, sold_as, price_cents }).eq('id', kursId)
   if (error) return { ok: false, error: error.message }
 
   await logAdminAction({ actorId: user.id, action: 'update', entityType: 'kurs', entityId: kursId, entityTitle: title })

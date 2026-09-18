@@ -25,7 +25,10 @@ import {
   createLesson,
   deleteDocument,
   deleteUnit,
+  reorderDocuments,
   reorderLessons,
+  reorderTasks,
+  reorderUnits,
   scanDocumentBacklinks,
   setKursPublished,
 } from '@/actions/admin'
@@ -48,6 +51,7 @@ import {
   type LessonEditorPreview,
 } from '@/components/lessons/LessonEditor'
 import { DocumentForm } from './DocumentForm'
+import { DocumentPreview } from './DocumentPreview'
 import { KursForm } from './KursForm'
 import { TaskForm } from './TaskForm'
 import { UnitForm } from './UnitForm'
@@ -87,6 +91,7 @@ export function KursManageWorkspace({
   const [deletePending, startDeleteTransition] = useTransition()
   const [treeError, setTreeError] = useState<string | null>(null)
   const branchUnitId = selectedUnitId(kurs, selection)
+  const { items: units, reorder: reorderUnitIds } = useDraggableOrder(kurs.units)
 
   /**
    * Deleting an Einheit takes its Aufgaben, Dokumente and Lernseiten with it —
@@ -113,34 +118,11 @@ export function KursManageWorkspace({
     })
   }
 
-  /**
-   * Deleting one Lernseite.
-   *
-   * ⚠ IT SCANS FOR BACKLINKS FIRST, like every other Dokument deletion in the
-   * admin (#75). A Lernseite is a `documents` row, so an interactive document
-   * elsewhere in the catalogue can link to it — and those links are not stored
-   * anywhere, they are found by looking. Deleting without asking would turn a
-   * live link into a dead one silently.
-   *
-   * A FAILED SCAN IS SAID OUT LOUD AND NEVER BLOCKS: „the check could not run"
-   * must not masquerade as „nothing links here", and refusing the delete would
-   * lock an author out of their own catalogue over a broken scan.
-   */
+  /** Deleting one Lernseite. */
   function removeLesson(lesson: AdminKursWorkspaceDocument) {
     setTreeError(null)
     startDeleteTransition(async () => {
-      let warning: string | null = null
-      try {
-        const scan = await scanDocumentBacklinks(lesson.id)
-        warning = scan.ok
-          ? backlinkDeleteWarning(scan.data)
-          : backlinkScanFailedWarning('diese Lernseite', scan.error)
-      } catch {
-        warning = backlinkScanFailedWarning('diese Lernseite')
-      }
-
-      const question = `Lernseite „${lesson.title}" wirklich löschen?`
-      if (!window.confirm(warning ? `${warning}\n\n${question}` : question)) return
+      if (!(await confirmDocumentDeletion(lesson, 'Lernseite', 'diese Lernseite'))) return
 
       const result = await deleteDocument(lesson.id)
       if (!result.ok) {
@@ -153,6 +135,67 @@ export function KursManageWorkspace({
       )
       router.refresh()
     })
+  }
+
+  /**
+   * Deletes a Dokument of a Musterlösung — the same `documents` row and the
+   * same backlink rule as a Lernseite, so it runs the same confirmation.
+   */
+  function removeDocument(doc: AdminKursWorkspaceDocument) {
+    setTreeError(null)
+    startDeleteTransition(async () => {
+      if (!(await confirmDocumentDeletion(doc, 'Dokument', 'dieses Dokument'))) return
+
+      const result = await deleteDocument(doc.id)
+      if (!result.ok) {
+        setTreeError(result.error)
+        return
+      }
+      // Was the panel showing the row that just went away? Fall back to its
+      // Aufgabe, which keeps the tree open where the author was working.
+      setSelection((current) =>
+        current.kind === 'document' && current.id === doc.id
+          ? { kind: 'new-document', taskId: doc.task_id }
+          : current
+      )
+      router.refresh()
+    })
+  }
+
+  /** Persists a drag of the Dokumente inside one Aufgabe. */
+  function persistDocumentOrder(taskId: string, documentIds: string[]) {
+    setTreeError(null)
+    startDeleteTransition(async () => {
+      const result = await reorderDocuments(taskId, documentIds)
+      if (!result.ok) setTreeError(result.error)
+      router.refresh()
+    })
+  }
+
+  /** Persists a drag of the Aufgaben inside one Einheit. */
+  function persistTaskOrder(unitId: string, taskIds: string[]) {
+    setTreeError(null)
+    startDeleteTransition(async () => {
+      const result = await reorderTasks(unitId, taskIds)
+      if (!result.ok) setTreeError(result.error)
+      router.refresh()
+    })
+  }
+
+  /** Persists a drag of the Einheiten of this Kurs. */
+  function persistUnitOrder(unitIds: string[]) {
+    setTreeError(null)
+    startDeleteTransition(async () => {
+      const result = await reorderUnits(kurs.id, unitIds)
+      if (!result.ok) setTreeError(result.error)
+      router.refresh()
+    })
+  }
+
+  function finishUnitDrag({ active, over }: DragEndEvent) {
+    if (!over || active.id === over.id) return
+    const next = reorderUnitIds(String(active.id), String(over.id))
+    if (next) persistUnitOrder(next)
   }
 
   /** Persists a drag. The tree re-reads from the server, so a failure simply undoes itself. */
@@ -195,7 +238,7 @@ export function KursManageWorkspace({
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <Link
-                  href="/admin/kurse"
+                  href="/admin"
                   className="text-xs font-semibold text-gray-500 transition-colors hover:text-brand"
                 >
                   ← Kurse verwalten
@@ -295,7 +338,12 @@ export function KursManageWorkspace({
             </div>
 
             <ul className="mt-1 space-y-0.5">
-              {kurs.units.map((unit, unitIndex) => {
+              <TreeDndContext id={`units-${kurs.id}`} onDragEnd={finishUnitDrag}>
+                <SortableContext
+                  items={units.map((unit) => unit.id)}
+                  strategy={verticalListSortingStrategy}
+                >
+              {units.map((unit, unitIndex) => {
                 const active = branchUnitId === unit.id
                 // An Einheit is numbered only once it holds Lernseiten — the
                 // same rule the Einheit heading follows, so the tree and the
@@ -304,37 +352,18 @@ export function KursManageWorkspace({
                   unitNumberPath(unitIndex + 1, kurs.kurs_type === 'lernkurs')
                 )
                 return (
-                  <li key={unit.id}>
-                    {/* `group` so the delete button only appears on hover or
-                        keyboard focus: it sits beside every Einheit, and a row
-                        of permanent trash icons makes a tree look dangerous. */}
-                    <div className="group flex items-center gap-1">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSelection({ kind: 'unit', id: unit.id })
-                          setMobileOpen(false)
-                        }}
-                        className={`${sidebarRow(active, 'font-bold')} flex-1`}
-                      >
-                        <Dot active={active} />
-                        {unitLabel && (
-                          <span className="shrink-0 tabular-nums text-gray-400">{unitLabel}</span>
-                        )}
-                        <span className="truncate">{unit.title}</span>
-                      </button>
-                      <button
-                        type="button"
-                        disabled={deletePending}
-                        onClick={() => removeUnit(unit)}
-                        aria-label={`Einheit ${unit.title} löschen`}
-                        title="Einheit löschen"
-                        className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-gray-400 transition-colors focus-visible:ring-2 focus-visible:ring-brand focus-visible:outline-none disabled:pointer-events-none disabled:opacity-30 [&_svg]:size-3.5 hover:bg-red-50 hover:text-red-600"
-                      >
-                        <Trash2 />
-                      </button>
-                    </div>
-
+                  <UnitRow
+                    key={unit.id}
+                    unit={unit}
+                    active={active}
+                    label={unitLabel}
+                    onSelect={() => {
+                      setSelection({ kind: 'unit', id: unit.id })
+                      setMobileOpen(false)
+                    }}
+                    onDelete={() => removeUnit(unit)}
+                    deletePending={deletePending}
+                  >
                     {active && (
                       kurs.kurs_type === 'lernkurs' ? (
                         <LessonRows
@@ -363,12 +392,18 @@ export function KursManageWorkspace({
                             setSelection(next)
                             setMobileOpen(false)
                           }}
+                          onReorderTasks={(taskIds) => persistTaskOrder(unit.id, taskIds)}
+                          onReorderDocuments={persistDocumentOrder}
+                          onDelete={removeDocument}
+                          deletePending={deletePending}
                         />
                       )
                     )}
-                  </li>
+                  </UnitRow>
                 )
               })}
+                </SortableContext>
+              </TreeDndContext>
             </ul>
 
             {kurs.units.length === 0 && (
@@ -402,84 +437,87 @@ export function KursManageWorkspace({
   )
 }
 
+/**
+ * The question every Dokument deletion asks — a Lernseite and a Musterlösungs-
+ * Dokument are the same `documents` row, so they ask it the same way.
+ *
+ * ⚠ IT SCANS FOR BACKLINKS FIRST (#75). An interactive document elsewhere in
+ * the catalogue can link to this row, and those links are not stored anywhere —
+ * they are found by looking. Deleting without asking would turn a live link
+ * into a dead one silently.
+ *
+ * A FAILED SCAN IS SAID OUT LOUD AND NEVER BLOCKS: „the check could not run"
+ * must not masquerade as „nothing links here", and refusing the delete would
+ * lock an author out of their own catalogue over a broken scan.
+ */
+async function confirmDocumentDeletion(
+  doc: AdminKursWorkspaceDocument,
+  noun: 'Lernseite' | 'Dokument',
+  /** The same noun as the object of a sentence — „… auf diese Lernseite".
+      Typed from the warning itself so the two cannot drift apart. */
+  subject: Parameters<typeof backlinkScanFailedWarning>[0]
+): Promise<boolean> {
+  let warning: string | null = null
+  try {
+    const scan = await scanDocumentBacklinks(doc.id)
+    warning = scan.ok ? backlinkDeleteWarning(scan.data) : backlinkScanFailedWarning(subject, scan.error)
+  } catch {
+    warning = backlinkScanFailedWarning(subject)
+  }
+
+  const question = `${noun} „${doc.title}" wirklich löschen?`
+  return window.confirm(warning ? `${warning}\n\n${question}` : question)
+}
+
 function TaskRows({
   unit,
   selection,
   onAdd,
   onSelect,
+  onReorderTasks,
+  onReorderDocuments,
+  onDelete,
+  deletePending,
 }: {
   unit: AdminKursWorkspaceUnit
   selection: Selection
   onAdd: () => void
   onSelect: (selection: Selection) => void
+  onReorderTasks: (taskIds: string[]) => void
+  onReorderDocuments: (taskId: string, documentIds: string[]) => void
+  onDelete: (doc: AdminKursWorkspaceDocument) => void
+  deletePending: boolean
 }) {
-  const tasks = unit.tasks.filter((task) => task.title !== LESSON_TASK_TITLE)
+  // The invisible „Lernseite" Aufgabe never reaches the tree, and therefore
+  // never reaches a dragged list either — `reorderTasks` excludes it for the
+  // same reason.
+  const { items: tasks, reorder } = useDraggableOrder(
+    unit.tasks.filter((task) => task.title !== LESSON_TASK_TITLE)
+  )
+
+  function finishDrag({ active, over }: DragEndEvent) {
+    if (!over || active.id === over.id) return
+    const next = reorder(String(active.id), String(over.id))
+    if (next) onReorderTasks(next)
+  }
 
   return (
     <ul className="mt-0.5 ml-4 space-y-0.5 border-l border-gray-200 pl-2">
-      {tasks.map((task) => {
-        const active =
-          (selection.kind === 'task' && selection.id === task.id) ||
-          (selection.kind === 'new-document' && selection.taskId === task.id) ||
-          (selection.kind === 'document' && task.documents.some((doc) => doc.id === selection.id))
-
-        return (
-          <li key={task.id}>
-            {/* IN A MUSTERLÖSUNGS-KURS, OPENING AN UNTERKAPITEL MEANS UPLOADING
-                INTO IT. That is the only thing anyone comes here to do: the
-                Unterkapitel is a folder, and its own title and description are
-                set once when it is created and almost never again. So the row
-                goes straight to the upload form, and editing the Unterkapitel
-                itself moved to the pencil beside it — the rarer action gets the
-                smaller target, not the other way round.
-
-                A Lernkurs never reaches this component; its Einheiten render
-                LessonRows instead. */}
-            <div className="group flex items-center gap-1">
-              <button
-                type="button"
-                onClick={() => onSelect({ kind: 'new-document', taskId: task.id })}
-                className={`${sidebarRow(active, 'font-medium text-[13px]')} flex-1`}
-              >
-                <Dot active={active} muted />
-                <span className="truncate">{task.title}</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => onSelect({ kind: 'task', id: task.id })}
-                aria-label={`Unterkapitel ${task.title} bearbeiten`}
-                title="Unterkapitel bearbeiten"
-                className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-gray-400 transition-colors focus-visible:ring-2 focus-visible:ring-brand focus-visible:outline-none disabled:pointer-events-none disabled:opacity-30 [&_svg]:size-3.5 hover:bg-gray-100 hover:text-gray-700"
-              >
-                <Pencil />
-              </button>
-            </div>
-
-            {active && task.documents.length > 0 && (
-              <ul className="ml-4 space-y-0.5 border-l border-gray-200 pl-2">
-                {task.documents.map((doc) => (
-                  <li key={doc.id}>
-                    <button
-                      type="button"
-                      onClick={() => onSelect({ kind: 'document', id: doc.id })}
-                      className={sidebarRow(
-                        selection.kind === 'document' && selection.id === doc.id,
-                        'font-medium text-xs'
-                      )}
-                    >
-                      <Dot
-                        active={selection.kind === 'document' && selection.id === doc.id}
-                        muted
-                      />
-                      <span className="truncate">{doc.title}</span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </li>
-        )
-      })}
+      <TreeDndContext id={`tasks-${unit.id}`} onDragEnd={finishDrag}>
+        <SortableContext items={tasks.map((task) => task.id)} strategy={verticalListSortingStrategy}>
+          {tasks.map((task) => (
+            <TaskRow
+              key={task.id}
+              task={task}
+              selection={selection}
+              onSelect={onSelect}
+              onReorderDocuments={(documentIds) => onReorderDocuments(task.id, documentIds)}
+              onDelete={onDelete}
+              deletePending={deletePending}
+            />
+          ))}
+        </SortableContext>
+      </TreeDndContext>
       <li>
         <button
           type="button"
@@ -491,6 +529,344 @@ function TaskRows({
         </button>
       </li>
     </ul>
+  )
+}
+
+/**
+ * One draggable Einheit row, with whatever it contains nested underneath —
+ * Lernseiten or Aufgaben, which is the caller's business, so it arrives as
+ * `children` rather than as another six props threaded through here.
+ */
+function UnitRow({
+  unit,
+  active,
+  label,
+  onSelect,
+  onDelete,
+  deletePending,
+  children,
+}: {
+  unit: AdminKursWorkspaceUnit
+  active: boolean
+  label: string
+  onSelect: () => void
+  onDelete: () => void
+  deletePending: boolean
+  children: React.ReactNode
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: unit.id,
+  })
+
+  return (
+    <li
+      ref={setNodeRef}
+      style={{ transform: CSS.Transform.toString(transform), transition }}
+      className={isDragging ? 'z-10 opacity-70' : undefined}
+    >
+      {/* `group` so the grip only appears on hover or keyboard focus. The
+          delete button beside it stays visible — that is the rule, not an
+          oversight (DESIGN.md). */}
+      <div className="group flex items-center gap-1">
+        <button
+          type="button"
+          {...attributes}
+          {...listeners}
+          aria-label={`${unit.title} verschieben`}
+          title="Verschieben"
+          className="shrink-0 cursor-grab touch-none rounded p-0.5 text-gray-300 opacity-0 hover:text-gray-600 focus-visible:opacity-100 active:cursor-grabbing group-hover:opacity-100"
+        >
+          <GripVertical className="size-3.5" />
+        </button>
+        <button type="button" onClick={onSelect} className={`${sidebarRow(active, 'font-bold')} flex-1`}>
+          <Dot active={active} />
+          {label && <span className="shrink-0 tabular-nums text-gray-400">{label}</span>}
+          <span className="truncate">{unit.title}</span>
+        </button>
+        <button
+          type="button"
+          disabled={deletePending}
+          onClick={onDelete}
+          aria-label={`Einheit ${unit.title} löschen`}
+          title="Einheit löschen"
+          className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-gray-400 transition-colors focus-visible:ring-2 focus-visible:ring-brand focus-visible:outline-none disabled:pointer-events-none disabled:opacity-30 [&_svg]:size-3.5 hover:bg-red-50 hover:text-red-600"
+        >
+          <Trash2 />
+        </button>
+      </div>
+
+      {children}
+    </li>
+  )
+}
+
+/** One draggable Aufgabe row, with its Dokumente nested underneath. */
+function TaskRow({
+  task,
+  selection,
+  onSelect,
+  onReorderDocuments,
+  onDelete,
+  deletePending,
+}: {
+  task: AdminKursWorkspaceTask
+  selection: Selection
+  onSelect: (selection: Selection) => void
+  onReorderDocuments: (documentIds: string[]) => void
+  onDelete: (doc: AdminKursWorkspaceDocument) => void
+  deletePending: boolean
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: task.id,
+  })
+
+  const active =
+    (selection.kind === 'task' && selection.id === task.id) ||
+    (selection.kind === 'new-document' && selection.taskId === task.id) ||
+    (selection.kind === 'document' && task.documents.some((doc) => doc.id === selection.id))
+
+  return (
+    <li
+      ref={setNodeRef}
+      style={{ transform: CSS.Transform.toString(transform), transition }}
+      className={isDragging ? 'z-10 opacity-70' : undefined}
+    >
+      {/* IN A MUSTERLÖSUNGS-KURS, OPENING AN UNTERKAPITEL MEANS UPLOADING
+          INTO IT. That is the only thing anyone comes here to do: the
+          Unterkapitel is a folder, and its own title and description are
+          set once when it is created and almost never again. So the row
+          goes straight to the upload form, and editing the Unterkapitel
+          itself moved to the pencil beside it — the rarer action gets the
+          smaller target, not the other way round.
+
+          A Lernkurs never reaches this component; its Einheiten render
+          LessonRows instead. */}
+      <div className="group flex items-center gap-1">
+        <button
+          type="button"
+          {...attributes}
+          {...listeners}
+          aria-label={`${task.title} verschieben`}
+          title="Verschieben"
+          className="shrink-0 cursor-grab touch-none rounded p-0.5 text-gray-300 opacity-0 hover:text-gray-600 focus-visible:opacity-100 active:cursor-grabbing group-hover:opacity-100"
+        >
+          <GripVertical className="size-3.5" />
+        </button>
+        <button
+          type="button"
+          onClick={() => onSelect({ kind: 'new-document', taskId: task.id })}
+          className={`${sidebarRow(active, 'font-medium text-[13px]')} flex-1`}
+        >
+          <Dot active={active} muted />
+          <span className="truncate">{task.title}</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => onSelect({ kind: 'task', id: task.id })}
+          aria-label={`Unterkapitel ${task.title} bearbeiten`}
+          title="Unterkapitel bearbeiten"
+          className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-gray-400 transition-colors focus-visible:ring-2 focus-visible:ring-brand focus-visible:outline-none disabled:pointer-events-none disabled:opacity-30 [&_svg]:size-3.5 hover:bg-gray-100 hover:text-gray-700"
+        >
+          <Pencil />
+        </button>
+      </div>
+
+      {active && task.documents.length > 0 && (
+        <DocumentRows
+          task={task}
+          selection={selection}
+          onSelect={onSelect}
+          onReorder={onReorderDocuments}
+          onDelete={onDelete}
+          deletePending={deletePending}
+        />
+      )}
+    </li>
+  )
+}
+
+/**
+ * Keeps a dragged order on screen while the server catches up.
+ *
+ * IT HOLDS THE ORDER, NOT THE ROWS. The rows are read fresh from the server on
+ * every render and merely looked up by id, so a row whose title changed or
+ * whose children were edited still updates while its new position is being
+ * persisted. Holding the objects instead would freeze them until the id
+ * sequence happened to change — which a rename never does.
+ *
+ * The server's order is adopted whenever it actually changes: a row added or
+ * deleted elsewhere, or a reorder that was refused and therefore came back the
+ * way it was. Compared by id sequence rather than array identity, which is new
+ * on every render.
+ */
+function useDraggableOrder<T extends { id: string }>(serverItems: T[]) {
+  const serverKey = serverItems.map((item) => item.id).join(',')
+  const [lastServerKey, setLastServerKey] = useState(serverKey)
+  const [orderedIds, setOrderedIds] = useState(() => serverItems.map((item) => item.id))
+
+  if (serverKey !== lastServerKey) {
+    setLastServerKey(serverKey)
+    setOrderedIds(serverItems.map((item) => item.id))
+  }
+
+  const byId = new Map(serverItems.map((item) => [item.id, item]))
+  const items = orderedIds
+    .map((id) => byId.get(id))
+    .filter((item): item is T => item !== undefined)
+
+  /** Moves `activeId` onto `overId` and returns the new id order to persist. */
+  function reorder(activeId: string, overId: string): string[] | null {
+    const from = items.findIndex((item) => item.id === activeId)
+    const to = items.findIndex((item) => item.id === overId)
+    if (from === -1 || to === -1) return null
+    const next = arrayMove(items, from, to).map((item) => item.id)
+    setOrderedIds(next)
+    return next
+  }
+
+  return { items, reorder }
+}
+
+/**
+ * The DndContext every sortable list in this tree uses.
+ *
+ * ⚠ THE `id` IS LOAD-BEARING, not decoration. dnd-kit derives the
+ * `aria-describedby` it puts on every draggable from its context's id, and an
+ * auto-generated one is a counter that need not line up between the server's
+ * render and the client's. React reports that as a hydration mismatch the
+ * moment a sortable list is part of the FIRST paint — which the Einheiten are,
+ * unlike the Lernseiten, which only ever appear after a click.
+ *
+ * The distance threshold is what keeps a click a click: without it every press
+ * on a row would start a drag and swallow the selection.
+ */
+function TreeDndContext({
+  id,
+  onDragEnd,
+  children,
+}: {
+  id: string
+  onDragEnd: (event: DragEndEvent) => void
+  children: React.ReactNode
+}) {
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+  )
+
+  return (
+    <DndContext id={id} sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
+      {children}
+    </DndContext>
+  )
+}
+
+/**
+ * The Dokumente of ONE Aufgabe: drag to reorder, trash to delete.
+ *
+ * Each list gets its own DndContext, which is what confines a drag to its own
+ * folder — `position` is only ever meaningful among siblings, so a row must not
+ * be droppable into a list it does not belong to.
+ */
+function DocumentRows({
+  task,
+  selection,
+  onSelect,
+  onReorder,
+  onDelete,
+  deletePending,
+}: {
+  task: AdminKursWorkspaceTask
+  selection: Selection
+  onSelect: (selection: Selection) => void
+  onReorder: (documentIds: string[]) => void
+  onDelete: (doc: AdminKursWorkspaceDocument) => void
+  deletePending: boolean
+}) {
+  const { items: documents, reorder } = useDraggableOrder(task.documents)
+
+  function finishDrag({ active, over }: DragEndEvent) {
+    if (!over || active.id === over.id) return
+    const next = reorder(String(active.id), String(over.id))
+    if (next) onReorder(next)
+  }
+
+  return (
+    <ul className="ml-4 space-y-0.5 border-l border-gray-200 pl-2">
+      <TreeDndContext id={`documents-${task.id}`} onDragEnd={finishDrag}>
+        <SortableContext
+          items={documents.map((doc) => doc.id)}
+          strategy={verticalListSortingStrategy}
+        >
+          {documents.map((doc) => (
+            <DocumentRow
+              key={doc.id}
+              doc={doc}
+              active={selection.kind === 'document' && selection.id === doc.id}
+              onSelect={() => onSelect({ kind: 'document', id: doc.id })}
+              onDelete={() => onDelete(doc)}
+              deletePending={deletePending}
+            />
+          ))}
+        </SortableContext>
+      </TreeDndContext>
+    </ul>
+  )
+}
+
+/** One draggable Dokument row: a grip that drags, a row that opens it. */
+function DocumentRow({
+  doc,
+  active,
+  onSelect,
+  onDelete,
+  deletePending,
+}: {
+  doc: AdminKursWorkspaceDocument
+  active: boolean
+  onSelect: () => void
+  onDelete: () => void
+  deletePending: boolean
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: doc.id,
+  })
+
+  return (
+    <li
+      ref={setNodeRef}
+      style={{ transform: CSS.Transform.toString(transform), transition }}
+      className={`group flex items-center gap-1 ${isDragging ? 'z-10 opacity-70' : ''}`}
+    >
+      <button
+        type="button"
+        {...attributes}
+        {...listeners}
+        aria-label={`${doc.title} verschieben`}
+        title="Verschieben"
+        className="shrink-0 cursor-grab touch-none rounded p-0.5 text-gray-300 opacity-0 hover:text-gray-600 focus-visible:opacity-100 active:cursor-grabbing group-hover:opacity-100"
+      >
+        <GripVertical className="size-3.5" />
+      </button>
+      <button
+        type="button"
+        onClick={onSelect}
+        className={`${sidebarRow(active, 'font-medium text-xs')} flex-1`}
+      >
+        <Dot active={active} muted />
+        <span className="truncate">{doc.title}</span>
+      </button>
+      <button
+        type="button"
+        disabled={deletePending}
+        onClick={onDelete}
+        aria-label={`Dokument ${doc.title} löschen`}
+        title="Dokument löschen"
+        className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-gray-400 transition-colors focus-visible:ring-2 focus-visible:ring-brand focus-visible:outline-none disabled:pointer-events-none disabled:opacity-30 [&_svg]:size-3.5 hover:bg-red-50 hover:text-red-600"
+      >
+        <Trash2 />
+      </button>
+    </li>
   )
 }
 
@@ -577,42 +953,20 @@ function LessonRows({
   onDelete: (lesson: AdminKursWorkspaceDocument) => void
   deletePending: boolean
 }) {
-  const serverLessons = unit.tasks
-    .filter((task) => task.title === LESSON_TASK_TITLE)
-    .flatMap((task) => task.documents.filter((doc) => doc.file_type === 'lesson'))
-
-  const [lessons, setLessons] = useState(serverLessons)
-
-  // Adopt the server's list whenever it actually changes — a page added or
-  // deleted elsewhere, or a reorder that was refused. Compared by id sequence
-  // rather than by array identity, which is new on every render.
-  const serverKey = serverLessons.map((lesson) => lesson.id).join(',')
-  const [lastServerKey, setLastServerKey] = useState(serverKey)
-  if (serverKey !== lastServerKey) {
-    setLastServerKey(serverKey)
-    setLessons(serverLessons)
-  }
-
-  const sensors = useSensors(
-    // A small distance threshold so a click is still a click: without it every
-    // press on a row would start a drag and swallow the navigation.
-    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+  const { items: lessons, reorder } = useDraggableOrder(
+    unit.tasks
+      .filter((task) => task.title === LESSON_TASK_TITLE)
+      .flatMap((task) => task.documents.filter((doc) => doc.file_type === 'lesson'))
   )
-
   function finishDrag({ active, over }: DragEndEvent) {
     if (!over || active.id === over.id) return
-    const from = lessons.findIndex((lesson) => lesson.id === active.id)
-    const to = lessons.findIndex((lesson) => lesson.id === over.id)
-    if (from === -1 || to === -1) return
-    const next = arrayMove(lessons, from, to)
-    setLessons(next)
-    onReorder(next.map((lesson) => lesson.id))
+    const next = reorder(String(active.id), String(over.id))
+    if (next) onReorder(next)
   }
 
   return (
     <ul className="mt-0.5 ml-4 space-y-0.5 border-l border-gray-200 pl-2">
-      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={finishDrag}>
+      <TreeDndContext id={`lessons-${unit.id}`} onDragEnd={finishDrag}>
         <SortableContext
           items={lessons.map((lesson) => lesson.id)}
           strategy={verticalListSortingStrategy}
@@ -633,7 +987,7 @@ function LessonRows({
             />
           ))}
         </SortableContext>
-      </DndContext>
+      </TreeDndContext>
       <li>
         <button
           type="button"
@@ -684,9 +1038,13 @@ function WorkspacePanel({
   )
   const heading = panelHeading(kurs, selection, unit, task, document, lesson)
 
+  // No card: the panel sits directly on the page. The horizontal padding went
+  // with the frame — `<main>` already provides the page gutter, and keeping
+  // both would indent the content twice. The rule under the heading stays: it
+  // separates the heading from the content rather than boxing either in.
   return (
-    <section className="overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-[0_10px_35px_rgba(15,23,42,0.06)]">
-      <header className="border-b border-gray-100 px-6 py-5 sm:px-8">
+    <section>
+      <header className="border-b border-gray-100 pb-5">
         <p className="text-[11px] font-bold tracking-[0.1em] text-gray-400 uppercase">
           {heading.eyebrow}
         </p>
@@ -706,7 +1064,7 @@ function WorkspacePanel({
         </div>
       </header>
 
-      <div className="px-6 py-6 sm:px-8 sm:py-8">
+      <div className="py-6 sm:py-8">
         {selection.kind === 'kurs' && (
           <KursForm
             key={kurs.id}
@@ -767,13 +1125,16 @@ function WorkspacePanel({
         )}
 
         {selection.kind === 'document' && document && (
-          <DocumentForm
-            key={document.id}
-            tasks={tasksForForm}
-            defaultTaskId={document.task_id}
-            editId={document.id}
-            defaultValues={document}
-          />
+          <>
+            <DocumentForm
+              key={document.id}
+              tasks={tasksForForm}
+              defaultTaskId={document.task_id}
+              editId={document.id}
+              defaultValues={document}
+            />
+            <DocumentPreview key={`preview-${document.id}`} document={document} />
+          </>
         )}
 
         {selection.kind === 'new-lesson' && (

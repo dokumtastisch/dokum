@@ -26,7 +26,15 @@ const UNIT_ID = '22222222-2222-4222-8222-222222222222'
 const LOCKED: LinkTargetDescriptor = {
   state: 'locked',
   title: 'Aufgabe 2 — Herleitung',
-  unit: { id: UNIT_ID, title: 'Einheit 3', description: 'DCF und Multiples.' },
+  unit: {
+    id: UNIT_ID,
+    title: 'Einheit 3',
+    description: 'DCF und Multiples.',
+    kursId: KURS_ID,
+    kursTitle: 'Unternehmensbewertung',
+    soldAs: 'unit',
+    kursPriceCents: 1500,
+  },
 }
 
 function withLink(target: LinkTarget, label = 'Kapitel 3'): LatestEditorDocumentJson {

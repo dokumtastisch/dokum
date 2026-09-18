@@ -168,7 +168,7 @@ export default function UnitDetailClient({ tasks, openTaskId, watermarkId }: { t
                               docId={doc.id}
                               className="mt-0.5 inline-block text-xs text-gray-400 hover:text-brand"
                             >
-                              Einzelansicht ↗
+                              Open on its own page ↗
                             </DocumentLink>
                           </div>
                         )

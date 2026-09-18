@@ -254,7 +254,7 @@ export const getKursNavTree = cache(async (kursId: string): Promise<KursNavTree 
   const { data, error } = await supabase
     .from('kurse')
     .select(
-      `id, title, description, kurs_type,
+      `id, title, description, kurs_type, sold_as, price_cents,
        units(id, title, description, position, created_at,
          tasks(id, title, position, created_at,
            documents(id, title, file_type, position, created_at)))`
@@ -269,6 +269,8 @@ export const getKursNavTree = cache(async (kursId: string): Promise<KursNavTree 
     title: row.title,
     description: row.description,
     kurs_type: row.kurs_type,
+    sold_as: row.sold_as,
+    price_cents: row.price_cents,
     units: sortByPosition(row.units ?? []).map((unit) => ({
       id: unit.id,
       title: unit.title,
@@ -289,7 +291,10 @@ export const getKursNavTree = cache(async (kursId: string): Promise<KursNavTree 
 // The raw PostgREST shape of the query above — the nav types with the sort keys
 // still attached, which the mapping strips.
 type Positioned<T> = T & { position: number; created_at: string }
-type KursNavTreeRow = Pick<KursNavTree, 'id' | 'title' | 'description' | 'kurs_type'> & {
+type KursNavTreeRow = Pick<
+  KursNavTree,
+  'id' | 'title' | 'description' | 'kurs_type' | 'sold_as' | 'price_cents'
+> & {
   units:
     | Positioned<
         Pick<KursNavUnit, 'id' | 'title' | 'description'> & {
@@ -760,7 +765,9 @@ export async function getLinkTargetOwnership(
 
   const { data, error } = await supabase
     .from('documents')
-    .select('title, tasks!inner(units!inner(id, title, description, kurse!inner(published)))')
+    .select(
+      'title, tasks!inner(units!inner(id, title, description, kurse!inner(id, title, published, sold_as, price_cents)))'
+    )
     .eq('id', id)
     .maybeSingle()
   if (error) throw linkTargetReadFailed(kind, error)
@@ -770,7 +777,18 @@ export async function getLinkTargetOwnership(
   return {
     title: row.title,
     kursPublished: unit.kurse.published,
-    gatedBy: { id: unit.id, title: unit.title, description: unit.description },
+    // The Kurs travels with the Einheit: the entitlement check needs its id
+    // (a Kurs sold whole is opened by a Kurs grant), and the locked card needs
+    // to know what is actually for sale before it offers anything.
+    gatedBy: {
+      id: unit.id,
+      title: unit.title,
+      description: unit.description,
+      kursId: unit.kurse.id,
+      kursTitle: unit.kurse.title,
+      soldAs: unit.kurse.sold_as,
+      kursPriceCents: unit.kurse.price_cents,
+    },
   }
 }
 
@@ -802,7 +820,13 @@ type LinkTargetDocumentOwnershipRow = {
       id: string
       title: string
       description: string | null
-      kurse: { published: boolean }
+      kurse: {
+        id: string
+        title: string
+        published: boolean
+        sold_as: KursSoldAs
+        price_cents: number
+      }
     }
   }
 }
@@ -878,16 +902,35 @@ export async function getBacklinkScanRows(): Promise<BacklinkScanRow[]> {
 
 // ── Entitlement queries ─────────────────────────────────────────────────────
 
-// Returns the set of unit IDs the current user has access to via a paid
-// purchase or admin grant. Admins are treated as entitled to every unit;
-// callers that have an admin user can skip this query entirely.
-export async function getEntitledUnitIds(userId: string): Promise<Set<string>> {
+/**
+ * What a user has bought — Einheiten and whole Kurse, in one round trip.
+ *
+ * Both halves matter since add_kurs_entitlements.sql: a Musterlösung sells
+ * Einheit by Einheit, a Lernkurs sells the Kurs, and an entitlement row
+ * carries one or the other (never both — `entitlements_target_check`).
+ *
+ * Read in full and intersected in memory rather than filtered in the query:
+ * a user holds a handful of rows, and it keeps every caller free of a
+ * PostgREST `.or()` filter string built from ids.
+ *
+ * Admins are entitled to everything; callers holding an admin user can skip
+ * this entirely.
+ */
+export async function getEntitlementScope(
+  userId: string
+): Promise<{ unitIds: Set<string>; kursIds: Set<string> }> {
   const supabase = await createClient()
   const { data } = await supabase
     .from('entitlements')
-    .select('unit_id')
+    .select('unit_id, kurs_id')
     .eq('user_id', userId)
-  return new Set((data ?? []).map((row) => row.unit_id as string))
+  const unitIds = new Set<string>()
+  const kursIds = new Set<string>()
+  for (const row of data ?? []) {
+    if (row.unit_id) unitIds.add(row.unit_id as string)
+    if (row.kurs_id) kursIds.add(row.kurs_id as string)
+  }
+  return { unitIds, kursIds }
 }
 
 /**
@@ -896,37 +939,49 @@ export async function getEntitledUnitIds(userId: string): Promise<Set<string>> {
  *
  * Memoised for the same reason `getKursNavTree` is: a layout and the page
  * inside it ask it in the same render. Admins short-circuit the entitlement
- * query entirely — RLS lets them through everything anyway, so `entitledUnitIds`
- * would be a list they do not consult.
+ * query entirely — RLS lets them through everything anyway, so the two sets
+ * would be lists they do not consult.
  *
- * `locked` is decided HERE and nowhere else. It is a display state — a €3 badge
- * and a hollow dot — never the enforcement: that stays with RLS and with the
- * Einheit page's own `userHasUnitAccess` check.
+ * `locked` is decided HERE and nowhere else — and it takes BOTH sets: an
+ * Einheit is open when it was bought itself or when its Kurs was. It is a
+ * display state — a lock and a price badge — never the enforcement: that stays
+ * with RLS and with the Einheit page's own `userHasUnitAccess` check.
  */
 export const getKursViewerAccess = cache(
-  async (): Promise<{ isAdmin: boolean; entitledUnitIds: Set<string> }> => {
+  async (): Promise<{
+    isAdmin: boolean
+    entitledUnitIds: Set<string>
+    entitledKursIds: Set<string>
+  }> => {
     const supabase = await createClient()
     const { data: { user } } = await supabase.auth.getUser()
     const isAdmin = user?.app_metadata?.['role'] === 'admin'
-    if (!user || isAdmin) return { isAdmin, entitledUnitIds: new Set<string>() }
-    return { isAdmin, entitledUnitIds: await getEntitledUnitIds(user.id) }
+    if (!user || isAdmin) {
+      return { isAdmin, entitledUnitIds: new Set<string>(), entitledKursIds: new Set<string>() }
+    }
+    const { unitIds, kursIds } = await getEntitlementScope(user.id)
+    return { isAdmin, entitledUnitIds: unitIds, entitledKursIds: kursIds }
   }
 )
 
-// Single-unit access check. Pass the `app_metadata.role` value (or undefined)
-// so admins short-circuit without a DB round-trip.
+/**
+ * Single-Einheit access check — the gate the Einheit page itself runs.
+ *
+ * `kursId` is required, not optional: an Einheit under a Kurs sold as a whole
+ * is opened by the KURS grant, and a caller that forgot to pass it would show
+ * a paywall to someone who has already paid. Making it part of the signature
+ * is what stops that from being a thing anyone can forget.
+ *
+ * Pass the `app_metadata.role` value (or undefined) so admins short-circuit
+ * without a DB round-trip.
+ */
 export async function userHasUnitAccess(
   userId: string,
   unitId: string,
   role: string | undefined,
+  kursId: string,
 ): Promise<boolean> {
   if (role === 'admin') return true
-  const supabase = await createClient()
-  const { data } = await supabase
-    .from('entitlements')
-    .select('id')
-    .eq('user_id', userId)
-    .eq('unit_id', unitId)
-    .maybeSingle()
-  return data !== null
+  const { unitIds, kursIds } = await getEntitlementScope(userId)
+  return unitIds.has(unitId) || kursIds.has(kursId)
 }

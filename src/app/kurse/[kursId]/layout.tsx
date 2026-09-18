@@ -2,6 +2,8 @@ import { notFound } from 'next/navigation'
 import { getKursNavTree, getKursViewerAccess } from '@/lib/dal'
 import { KursSidebar } from '@/components/kurse/KursSidebar'
 import { DocumentRevealProvider } from '@/components/kurse/document-reveal'
+import { RecentKursTracker } from '@/components/kurse/RecentKursTracker'
+import { purchasePriceLabel } from '@/lib/pricing'
 
 /**
  * The shell every page inside a Kurs renders into (#106): navigation tree on
@@ -29,15 +31,19 @@ export default async function KursLayout({
 }) {
   const { kursId } = await params
 
-  const [kurs, { isAdmin, entitledUnitIds }] = await Promise.all([
+  const [kurs, { isAdmin, entitledUnitIds, entitledKursIds }] = await Promise.all([
     getKursNavTree(kursId),
     getKursViewerAccess(),
   ])
   if (!kurs) notFound()
 
+  // Two ways in: the Einheit was bought, or the Kurs it sits in was
+  // (add_kurs_entitlements.sql). Which of the two is on offer is `sold_as`,
+  // and the price badge follows it.
+  const kursEntitled = entitledKursIds.has(kursId)
   const units = kurs.units.map((unit) => ({
     ...unit,
-    locked: !isAdmin && !entitledUnitIds.has(unit.id),
+    locked: !isAdmin && !kursEntitled && !entitledUnitIds.has(unit.id),
   }))
 
   return (
@@ -53,6 +59,9 @@ export default async function KursLayout({
     // would leave the row as short as its content and strand the sidebar's
     // background halfway down the page.
     <div className="-mx-4 bg-[#fffdf8] sm:-mx-8">
+      {/* Records the visit for the catalogue's „Recently viewed" list.
+          Renders nothing. */}
+      <RecentKursTracker kursId={kursId} />
       {/* The line under the navbar. STICKY, not the container's `border-t`:
           a border at the top of a scrolling box scrolls away with the box, and
           the navbar above is `sticky` — so the moment the line left the
@@ -73,6 +82,7 @@ export default async function KursLayout({
             kursTitle={kurs.title}
             kursType={kurs.kurs_type}
             units={units}
+            lockedPriceLabel={purchasePriceLabel(kurs.sold_as, kurs.price_cents)}
           />
           <div className="min-w-0 flex-1 px-5 py-8 sm:px-8 lg:px-12 lg:py-10">{children}</div>
         </div>

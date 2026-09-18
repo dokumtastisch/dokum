@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { MIN_PRICE_CENTS, formatPriceEur } from '@/lib/constants'
 import { DocumentJsonSchema } from '@/lib/editor/document-json'
 import { LessonJsonSchema } from '@/lib/lessons/lesson-json'
 
@@ -21,6 +22,21 @@ export const KursFormSchema = z.object({
   // that omits them (or an older cached page) cannot silently retype a Kurs.
   kurs_type: z.enum(['musterloesung', 'lernkurs']).default('musterloesung'),
   sold_as: z.enum(['kurs', 'unit']).default('unit'),
+  // Was der ganze Kurs kostet — nur wirksam bei sold_as = 'kurs'.
+  //
+  // EINGABE IN EURO, GESPEICHERT IN CENT. Wer einen Preis setzt, denkt in
+  // Euro; eine verrutschte Null in einem Cent-Feld ist ein Faktor 10 im
+  // echten Verkaufspreis. Die Umrechnung passiert hier und nur hier.
+  //
+  // Die Untergrenze ist Stripes Mindestbetrag: darunter lehnt Stripe die
+  // Checkout-Session ab, was sonst als 500 beim Klick auf „Kaufen" ankäme
+  // statt als Formularfehler.
+  price_euro: z.coerce
+    .number({ message: 'Preis muss eine Zahl sein.' })
+    .min(MIN_PRICE_CENTS / 100, `Preis muss mindestens ${formatPriceEur(MIN_PRICE_CENTS)} betragen.`)
+    .max(10000, 'Preis ist unplausibel hoch.')
+    .transform((euro) => Math.round(euro * 100))
+    .default(15),
 })
 
 // Editing course metadata must not implicitly change visibility. Publishing is
@@ -58,6 +74,24 @@ export const DocumentUpdateMetaSchema = z.object({
   title: titleField,
   description: descriptionField,
   position: positionField,
+})
+
+// Reordering by dragging in the admin tree. Each schema names the PARENT, so
+// its action can prove every id in the list belongs to it — a request listing a
+// row from somewhere else must not be able to renumber it.
+export const UnitReorderSchema = z.object({
+  kurs_id: uuidField,
+  unit_ids: z.array(uuidField).min(1, 'Es wurde keine Reihenfolge übergeben.'),
+})
+
+export const TaskReorderSchema = z.object({
+  unit_id: uuidField,
+  task_ids: z.array(uuidField).min(1, 'Es wurde keine Reihenfolge übergeben.'),
+})
+
+export const DocumentReorderSchema = z.object({
+  task_id: uuidField,
+  document_ids: z.array(uuidField).min(1, 'Es wurde keine Reihenfolge übergeben.'),
 })
 
 // Editor drafts (PRD #28, slice 7). German messages — the editor UI is
@@ -186,6 +220,9 @@ export type UnitFormData = z.infer<typeof UnitFormSchema>
 export type TaskFormData = z.infer<typeof TaskFormSchema>
 export type DocumentMetaData = z.infer<typeof DocumentMetaSchema>
 export type DocumentUpdateMetaData = z.infer<typeof DocumentUpdateMetaSchema>
+export type UnitReorderData = z.infer<typeof UnitReorderSchema>
+export type TaskReorderData = z.infer<typeof TaskReorderSchema>
+export type DocumentReorderData = z.infer<typeof DocumentReorderSchema>
 export type EditorDraftFormData = z.infer<typeof EditorDraftFormSchema>
 export type EditorImageUploadData = z.infer<typeof EditorImageUploadSchema>
 export type EditorPublishData = z.infer<typeof EditorPublishSchema>

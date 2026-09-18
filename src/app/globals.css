@@ -39,6 +39,21 @@ body {
   font-family: Arial, Helvetica, sans-serif;
 }
 
+/*
+ * The public course catalogue carries its own header — logo and actions live
+ * inside its shell — so the global navbar steps aside for it.
+ *
+ * Matched on the rendered shell, NOT on a class an effect puts on <body>: that
+ * version only took hold after hydration, so every load painted the navbar and
+ * the page gutter first and then snapped 66px up and 32px left. The gutter is
+ * cancelled the way DESIGN.md prescribes for a full-bleed page (`-mx-4
+ * sm:-mx-8` on the shell), not by overriding <main>'s padding from here — two
+ * mechanisms for one job is what made the two fight.
+ */
+body:has(.course-catalog-shell) > nav {
+  display: none;
+}
+
 /* Prevent iOS Safari auto-zoom on input focus (triggers when font-size < 16px) */
 input:not([type="checkbox"]):not([type="radio"]),
 select,

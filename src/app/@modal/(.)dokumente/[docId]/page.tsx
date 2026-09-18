@@ -59,10 +59,10 @@ function OverlayNotFound() {
   return (
     <div className="py-10 text-center">
       <h1 id={TITLE_ID} className="text-xl font-semibold text-gray-900">
-        Dokument nicht gefunden
+        Document not found
       </h1>
       <p className="mt-2 text-sm text-gray-500">
-        Dieses Dokument existiert nicht oder ist für dich nicht freigeschaltet.
+        This document does not exist or is not unlocked for you.
       </p>
     </div>
   )
@@ -72,7 +72,7 @@ function OverlaySkeleton() {
   return (
     <div aria-busy="true">
       <h1 id={TITLE_ID} className="sr-only">
-        Dokument wird geladen
+        Loading document
       </h1>
       <DocumentArticleSkeleton />
     </div>

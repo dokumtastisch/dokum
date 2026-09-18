@@ -34,7 +34,9 @@ Tests run via Vitest ([vitest.config.ts](vitest.config.ts)): colocated `*.test.t
 
 ## Stack
 
-Next.js 16 (App Router) · React 19 · TypeScript 5 (strict) · Tailwind 4 · Supabase (Postgres + Auth + Storage) · Zod for input validation. The UI is German.
+Next.js 16 (App Router) · React 19 · TypeScript 5 (strict) · Tailwind 4 · Supabase (Postgres + Auth + Storage) · Zod for input validation.
+
+**UI language is split.** Everything a student sees — the catalogue, the Kurs shell, Einheit pages, the document overlay and their error and paywall states — is **English**, and uses the code's own vocabulary: Unit, Task, Document, Lesson, Course. The **admin** stays **German** („Kurse verwalten", „Aufgabe hinzufügen"), as do the Zod validation messages and the error strings the server actions return. One exception on the student side, deliberate: the legal pages (Impressum, Datenschutz, AGB) stay German because they are legal documents. The `kurs_type` values read „Model Solutions" / „Learning Courses" to students; the admin keeps „Musterlösung" / „Lernkurs".
 
 ## Design: [DESIGN.md](DESIGN.md) is binding
 
@@ -54,7 +56,7 @@ If a task cannot be done without a visual decision, **ask**. Changing the design
 
 These are load-bearing and easy to violate accidentally:
 
-- **Hierarchy:** `Kurs → Unit → Task → Document → DocumentImage`. Only `kurse.published` exists — don't add a `published` column anywhere else. Visibility is inherited from it all the way down: `kurse` and `units` gate on `published`; `tasks`, `documents`, `document_images` and the `pdfs` storage objects gate on **an `entitlements` row AND `kurse.published`** (or admin). That conjunct lives *inside each single policy* ([add_rls_published_conjunct.sql](supabase/add_rls_published_conjunct.sql), #80) and must stay there — permissive SELECT policies are OR'd, so expressing `published` as a second policy would grant access instead of restricting it. [/api/file](src/app/api/file/[docId]/route.ts), [/api/image](src/app/api/image/[imageId]/route.ts) and `/dokumente/[docId]` still re-check `kurse.published` in app code; that is now defence in depth, not the only gate. Changes to any of these four policies must be re-proved with [supabase/checks/rls_published_conjunct_check.sql](supabase/checks/rls_published_conjunct_check.sql) — `npm test` cannot see them.
+- **Hierarchy:** `Kurs → Unit → Task → Document → DocumentImage`. Only `kurse.published` exists — don't add a `published` column anywhere else. Visibility is inherited from it all the way down: `kurse` and `units` gate on `published`; `tasks`, `documents`, `document_images` and the `pdfs` storage objects gate on **an `entitlements` row AND `kurse.published`** (or admin). An entitlement row grants an Einheit **or** a whole Kurs (`kurse.sold_as` decides what is sold; [add_kurs_entitlements.sql](supabase/add_kurs_entitlements.sql)). That conjunct lives *inside each single policy* ([add_rls_published_conjunct.sql](supabase/add_rls_published_conjunct.sql), #80) and must stay there — permissive SELECT policies are OR'd, so expressing `published` as a second policy would grant access instead of restricting it. [/api/file](src/app/api/file/[docId]/route.ts), [/api/image](src/app/api/image/[imageId]/route.ts) and `/dokumente/[docId]` still re-check `kurse.published` in app code; that is now defence in depth, not the only gate. Changes to any of these four policies must be re-proved with BOTH [supabase/checks/rls_published_conjunct_check.sql](supabase/checks/rls_published_conjunct_check.sql) and [supabase/checks/rls_kurs_entitlement_check.sql](supabase/checks/rls_kurs_entitlement_check.sql) — `npm test` cannot see them.
 - **DAL is the only read path.** All Supabase reads go through [src/lib/dal.ts](src/lib/dal.ts), which is `import 'server-only'` — importing it from a client component is a build error. Page components and API routes must not call `supabase.from()` directly. Sorting (`position ASC, created_at ASC`) lives inside the DAL; don't re-sort in pages.
 - **Proxy is the single auth enforcement point.** [src/proxy.ts](src/proxy.ts) (Next.js 16 renamed the `middleware` convention to `proxy`) protects `/admin/*`, redirects unauthenticated users, and enforces consent. Admin pages must not duplicate the role check. Server actions still call `getAdminUser()` from [src/actions/admin/_shared.ts](src/actions/admin/_shared.ts) as defence in depth.
 - **Admin role lives in the JWT** as `auth.users.raw_app_meta_data.role = "admin"`. Read it via `user.app_metadata?.role`. Never query a role table.
@@ -91,7 +93,7 @@ The dev project is a free playground — break it freely. The prod project has r
 
 ## Database changes
 
-Migrations are plain SQL in [supabase/](supabase/) — apply via the Supabase SQL editor or CLI. Order matters: `migration.sql`, then `add_audit_log.sql`, then `add_entitlements.sql`, then `add_editor_documents.sql`, then `add_editor_images.sql`, then `add_document_content.sql`, then `add_rls_published_conjunct.sql`, then `add_lessons.sql`. There is no migration runner; new migrations must be applied manually.
+Migrations are plain SQL in [supabase/](supabase/) — apply via the Supabase SQL editor or CLI. Order matters: `migration.sql`, then `add_audit_log.sql`, then `add_entitlements.sql`, then `add_editor_documents.sql`, then `add_editor_images.sql`, then `add_document_content.sql`, then `add_rls_published_conjunct.sql`, then `add_lessons.sql`, then `add_kurs_entitlements.sql`. There is no migration runner; new migrations must be applied manually.
 
 `supabase/checks/` holds SQL verification scripts for guarantees the Vitest suite cannot reach (RLS, mainly). Each runs inside a transaction ending in `ROLLBACK` and aborts with a `… CHECK FAILED — …` message. Run the relevant one against **dev** after applying the migration it belongs to.
 
@@ -109,3 +111,13 @@ Use the MCP to inspect and modify the dev project instead of asking the user to 
 - **Instead of `get_advisors`,** verify a schema change by querying the catalog: `information_schema.columns` for the column's type and nullability, `pg_get_constraintdef(oid)` for a constraint's actual text, `pg_constraint.convalidated` (a CHECK added `NOT VALID` silently skips existing rows — this proves it didn't), and `pg_class.relrowsecurity` + `pg_policies` to confirm RLS and its policies survived. Then run the real query the app will issue.
 - **Instead of `generate_typescript_types`,** hand-check [src/types/index.ts](src/types/index.ts) against the migration. Where a TS union mirrors a DB CHECK — `Document['file_type']` and `documents_file_type_check` — the two must list the same values, and nothing enforces that but this step.
 - Auth is `SUPABASE_ACCESS_TOKEN`, a user-scope env var interpolated at server **launch**. A stale token shows up as `Unauthorized` on every call; confirm by hitting `https://api.supabase.com/v1/projects/<ref>` with a bearer header. A freshly-set token requires restarting Claude Code — it never reaches the running server process.
+
+<!-- BEGIN:nextjs-agent-rules -->
+
+# This is NOT the Next.js you know
+
+This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` (resolved from this file's directory; in monorepos the `next` package may not be visible from the repo root) before writing any code. Heed deprecation notices.
+
+This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
+
+<!-- END:nextjs-agent-rules -->

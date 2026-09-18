@@ -66,11 +66,14 @@ Alles kommt aus `globals.css`. Es gibt kein zweites Farbsystem.
 | Was | Wert | Quelle |
 |---|---|---|
 | Navbar-Höhe | **66 px**, `sticky top-0 z-50` | `Navbar.tsx` |
+| Logo-Position | **20 px von links, 16 px von oben — auf jeder Seite** | `Navbar.tsx`, Katalog-Sidebar |
 | Sidebar darunter | `lg:sticky lg:top-[66px] lg:h-[calc(100svh-66px)]` | Kurs-Shell |
 | Sidebarbreite | `lg:w-72` (Student) · `lg:w-80` (Admin) | |
 | Sprungziel-Versatz | `ANCHOR_SCROLL_OFFSET = 112` | `lib/document-anchor.ts` |
 
 **Die 66 stehen an mehreren Stellen und müssen zusammenpassen.** Wer die Navbar-Höhe ändert, sucht `66px` im ganzen `src/`.
+
+**Das Logo steht überall auf demselben Pixel.** Die Navbar ist deshalb **randbündig** (`px-5`, kein zentrierter `max-w`-Container) und ihr Innenabstand wächst nicht mit dem Breakpoint. Seiten, die die Navbar ausblenden und ein eigenes Logo tragen — heute der Katalog — setzen es auf dieselben 20/16 px (`aside px-4 py-4` + `px-1` am Link). Der **Footer** behält seinen zentrierten `max-w-[1420px]`-Deckel: er schließt die Seite ab, statt sie anzuführen.
 
 **Radien:** `rounded-md` für Bedienelemente und Eingaben, `rounded-xl` für Karten und Panels, `rounded-full` für Badges und Punkte.
 

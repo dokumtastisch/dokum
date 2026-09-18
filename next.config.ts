@@ -30,7 +30,11 @@ const nextConfig: NextConfig = {
     //   • script-src https://js.stripe.com — Stripe.js loader (forward-compat; harmless
     //     for the current redirect-only checkout flow).
     //   • frame-src — Stripe injects iframes from these origins for embedded Elements,
-    //     3DS challenges, and post-checkout hooks.
+    //     3DS challenges, and post-checkout hooks. 'self' + *.supabase.co additionally
+    //     let the admin document preview embed a PDF: it frames /api/file/[docId],
+    //     which answers with a 302 to a signed storage URL, and CSP re-checks the
+    //     REDIRECT TARGET — so 'self' alone is not enough. Only what this app may
+    //     embed; frame-ancestors stays 'none', so nothing may embed this app.
     //   • style-src 'unsafe-inline'  — required by Tailwind v4 and Next.js style injection.
     //   • font-src 'self'            — next/font/google self-hosts fonts at build time;
     //     no external font CDN request is made at runtime.
@@ -47,7 +51,7 @@ const nextConfig: NextConfig = {
       `connect-src ${connectSrc.join(' ')}`,
       "font-src 'self'",
       "img-src 'self' data: blob: https://*.supabase.co",
-      "frame-src https://js.stripe.com https://hooks.stripe.com https://checkout.stripe.com",
+      "frame-src 'self' https://*.supabase.co https://js.stripe.com https://hooks.stripe.com https://checkout.stripe.com",
       "frame-ancestors 'none'",
       "object-src 'none'",
       "base-uri 'self'",

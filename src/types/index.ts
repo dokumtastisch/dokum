@@ -24,11 +24,18 @@ export interface Kurs {
    * What a checkout sells (#107). Mirrors `kurse_sold_as_check`.
    *
    * ⚠ NOT an access gate. It says what is for sale; what a reader may open is
-   * decided by `entitlements` and RLS. The scoped entitlement that makes a
-   * whole-course purchase real does not exist yet, so `'kurs'` currently
-   * describes an intention, not a working checkout.
+   * decided by `entitlements` and RLS.
+   *
+   * `unit` — each Einheit is bought on its own, at the flat UNIT_PRICE_CENTS.
+   * `kurs` — one purchase covers the whole Kurs, at `price_cents`, and keeps
+   *          covering Einheiten added after the sale (add_kurs_entitlements.sql).
    */
   sold_as: KursSoldAs
+  /**
+   * What the whole Kurs costs, in EUR cents. Only read when `sold_as` is
+   * `'kurs'`; mirrors the `kurse_price_cents_check` floor of 50.
+   */
+  price_cents: number
 }
 
 export type KursType = 'musterloesung' | 'lernkurs'
@@ -165,6 +172,10 @@ export interface KursNavTree {
   description: string | null
   /** Decides whether Einheiten are numbered — see `unitNumberPath`. */
   kurs_type: KursType
+  /** Decides what a locked Einheit offers to sell — one Einheit or the Kurs. */
+  sold_as: KursSoldAs
+  /** The whole-Kurs price, in cents. Only meaningful when `sold_as` is `'kurs'`. */
+  price_cents: number
   units: KursNavUnit[]
 }
 
